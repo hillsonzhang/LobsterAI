@@ -235,7 +235,10 @@ const App: React.FC = () => {
       const currentVersion = await window.electron.appInfo.getVersion();
       const nextUpdate = await checkForAppUpdate(currentVersion);
       setUpdateInfo(nextUpdate);
-      if (!nextUpdate) {
+      if (nextUpdate) {
+        // Force update: automatically show modal when update is detected
+        setShowUpdateModal(true);
+      } else {
         setShowUpdateModal(false);
       }
     } catch (error) {
@@ -258,7 +261,7 @@ const App: React.FC = () => {
 
     // If the URL is a fallback page (not a direct file download), open in browser
     if (updateInfo.url.includes('#') || updateInfo.url.endsWith('/download-list')) {
-      setShowUpdateModal(false);
+      // Do NOT close modal — force update keeps it open
       try {
         const result = await window.electron.shell.openExternal(updateInfo.url);
         if (!result.success) {
@@ -652,6 +655,7 @@ const App: React.FC = () => {
           errorMessage={updateError}
           onCancelDownload={handleCancelDownload}
           onRetry={handleRetryUpdate}
+          forceUpdate
         />
       )}
       {permissionModal}

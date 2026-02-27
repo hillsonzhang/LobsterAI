@@ -13,6 +13,7 @@ interface AppUpdateModalProps {
   errorMessage: string | null;
   onCancelDownload: () => void;
   onRetry: () => void;
+  forceUpdate?: boolean;
 }
 
 function formatBytes(bytes: number): string {
@@ -35,11 +36,12 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   errorMessage,
   onCancelDownload,
   onRetry,
+  forceUpdate,
 }) => {
   const { latestVersion, date, changeLog } = updateInfo;
   const lang = i18nService.getLanguage();
   const currentLog = changeLog?.[lang] ?? { title: '', content: [] };
-  const isDismissible = modalState === 'info' || modalState === 'error';
+  const isDismissible = !forceUpdate && (modalState === 'info' || modalState === 'error');
 
   const handleBackdropClick = () => {
     if (isDismissible) {
@@ -67,6 +69,12 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
                 v{latestVersion}{date ? ` · ${date}` : ''}
               </p>
 
+              {forceUpdate && (
+                <p className="mt-2 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('forceUpdateMessage')}
+                </p>
+              )}
+
               {currentLog.title && (
                 <p className="mt-3 text-sm font-medium dark:text-claude-darkText text-claude-text">
                   {currentLog.title}
@@ -86,13 +94,15 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             </div>
 
             <div className="px-5 pb-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-              >
-                {i18nService.t('updateAvailableCancel')}
-              </button>
+              {!forceUpdate && (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                >
+                  {i18nService.t('updateAvailableCancel')}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onConfirm}
@@ -197,13 +207,15 @@ const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             )}
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
-              >
-                {i18nService.t('updateAvailableCancel')}
-              </button>
+              {!forceUpdate && (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="px-3 py-1.5 text-sm rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                >
+                  {i18nService.t('updateAvailableCancel')}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onRetry}

@@ -9,14 +9,12 @@ const isTestMode = () => {
   return configService.getConfig().app?.testMode === true;
 };
 
-// 自动更新
-export const getUpdateCheckUrl = () => isTestMode()
-  ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/update'
-  : 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/prod/update';
+// 自动更新（custom fork: 使用自定义 COS 地址）
+export const getUpdateCheckUrl = () =>
+  'https://rpa-1308871128.cos-website.ap-guangzhou.myqcloud.com/update.json';
 
-export const getFallbackDownloadUrl = () => isTestMode()
-  ? 'https://lobsterai.inner.youdao.com/#/download-list'
-  : 'https://lobsterai.youdao.com/#/download-list';
+export const getFallbackDownloadUrl = () =>
+  'https://rpa-1308871128.cos.ap-guangzhou.myqcloud.com';
 
 // Skill 商店
 export const getSkillStoreUrl = () => isTestMode()
