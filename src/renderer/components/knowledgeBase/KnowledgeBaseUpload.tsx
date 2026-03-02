@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ArrowUpTrayIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
 
@@ -9,24 +9,35 @@ interface KnowledgeBaseUploadProps {
 
 const KnowledgeBaseUpload: React.FC<KnowledgeBaseUploadProps> = ({ onUpload, disabled }) => {
   const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFiles = useCallback((files: FileList | null) => {
-    if (!files) return;
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      if (ext === 'pdf' || ext === 'md') {
-        onUpload((file as any).path || file.name);
-      }
+  const handleClick = useCallback(async () => {
+    if (disabled) return;
+    const result = await window.electron?.dialog?.selectFile({
+      title: i18nService.t('knowledgeBaseUpload'),
+      filters: [{ name: 'Documents', extensions: ['pdf', 'md'] }],
+    });
+    if (result?.success && result.path) {
+      onUpload(result.path);
     }
-  }, [onUpload]);
+  }, [disabled, onUpload]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (!disabled) handleFiles(e.dataTransfer.files);
-  }, [disabled, handleFiles]);
+    if (disabled) return;
+    const files = e.dataTransfer.files;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext === 'pdf' || ext === 'md') {
+        // In Electron sandbox, File.path may still be available for drag-and-drop
+        const filePath = (file as any).path;
+        if (filePath) {
+          onUpload(filePath);
+        }
+      }
+    }
+  }, [disabled, onUpload]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -36,10 +47,6 @@ const KnowledgeBaseUpload: React.FC<KnowledgeBaseUploadProps> = ({ onUpload, dis
   const handleDragLeave = useCallback(() => {
     setIsDragging(false);
   }, []);
-
-  const handleClick = useCallback(() => {
-    if (!disabled) fileInputRef.current?.click();
-  }, [disabled]);
 
   return (
     <div
@@ -63,14 +70,6 @@ const KnowledgeBaseUpload: React.FC<KnowledgeBaseUploadProps> = ({ onUpload, dis
       <p className="text-xs mt-1 dark:text-claude-darkTextSecondary text-claude-textSecondary">
         {i18nService.t('knowledgeBaseUploadFormats')}
       </p>
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="hidden"
-        accept=".pdf,.md"
-        multiple
-        onChange={(e) => handleFiles(e.target.files)}
-      />
     </div>
   );
 };
