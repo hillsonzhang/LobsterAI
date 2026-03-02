@@ -9,6 +9,7 @@ import { CoworkView } from './components/cowork';
 import { SkillsView } from './components/skills';
 import { ScheduledTasksView } from './components/scheduledTasks';
 import { McpView } from './components/mcp';
+import { KnowledgeBaseView } from './components/knowledgeBase';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
 import CoworkQuestionWizard from './components/cowork/CoworkQuestionWizard';
 import { configService } from './services/config';
@@ -31,7 +32,7 @@ import AppUpdateModal from './components/update/AppUpdateModal';
 const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsOptions, setSettingsOptions] = useState<SettingsOpenOptions>({});
-  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp'>('cowork');
+  const [mainView, setMainView] = useState<'cowork' | 'skills' | 'scheduledTasks' | 'mcp' | 'knowledgeBase'>('cowork');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -197,6 +198,10 @@ const App: React.FC = () => {
 
   const handleShowMcp = useCallback(() => {
     setMainView('mcp');
+  }, []);
+
+  const handleShowKnowledgeBase = useCallback(() => {
+    setMainView('knowledgeBase');
   }, []);
 
   const handleToggleSidebar = useCallback(() => {
@@ -588,6 +593,7 @@ const App: React.FC = () => {
           onShowCowork={handleShowCowork}
           onShowScheduledTasks={handleShowScheduledTasks}
           onShowMcp={handleShowMcp}
+          onShowKnowledgeBase={handleShowKnowledgeBase}
           onNewChat={handleNewChat}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={handleToggleSidebar}
@@ -614,6 +620,14 @@ const App: React.FC = () => {
                 isSidebarCollapsed={isSidebarCollapsed}
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
+                updateBadge={isSidebarCollapsed ? updateBadge : null}
+              />
+            ) : mainView === 'knowledgeBase' ? (
+              <KnowledgeBaseView
+                isSidebarCollapsed={isSidebarCollapsed}
+                onToggleSidebar={handleToggleSidebar}
+                onNewChat={handleNewChat}
+                onBack={handleShowCowork}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
               />
             ) : (
