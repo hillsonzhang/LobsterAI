@@ -33,6 +33,20 @@ contextBridge.exposeInMainWorld('electron', {
     delete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('mcp:setEnabled', options),
   },
+  rag: {
+    uploadDocument: (filePath: string, type: string) =>
+      ipcRenderer.invoke('rag:uploadDocument', { filePath, type }),
+    listDocuments: (limit?: number, offset?: number) =>
+      ipcRenderer.invoke('rag:listDocuments', { limit, offset }),
+    deleteDocument: (docId: string) =>
+      ipcRenderer.invoke('rag:deleteDocument', { docId }),
+    getDocumentStatus: (docId: string) =>
+      ipcRenderer.invoke('rag:getDocumentStatus', { docId }),
+    searchDocuments: (query: string, docIds?: string[]) =>
+      ipcRenderer.invoke('rag:searchDocuments', { query, docIds }),
+    getSidecarStatus: () =>
+      ipcRenderer.invoke('rag:getSidecarStatus'),
+  },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),
     requestCalendar: () => ipcRenderer.invoke('permissions:requestCalendar'),

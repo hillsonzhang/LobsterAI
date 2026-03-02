@@ -26,6 +26,8 @@ import { initLogger, getLogFilePath } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
+import { startSidecar, stopSidecar, getSidecarStatus } from './libs/pageindexSidecar';
+import * as ragService from './libs/ragService';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -1191,6 +1193,31 @@ if (!gotTheLock) {
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to update MCP server' };
     }
+  });
+
+  // --- RAG Knowledge Base IPC handlers ---
+  ipcMain.handle('rag:uploadDocument', async (_event, { filePath, type }) => {
+    return ragService.uploadDocument(filePath, type);
+  });
+
+  ipcMain.handle('rag:listDocuments', async (_event, { limit, offset } = {}) => {
+    return ragService.listDocuments(limit, offset);
+  });
+
+  ipcMain.handle('rag:deleteDocument', async (_event, { docId }) => {
+    return ragService.deleteDocument(docId);
+  });
+
+  ipcMain.handle('rag:getDocumentStatus', async (_event, { docId }) => {
+    return ragService.getDocumentStatus(docId);
+  });
+
+  ipcMain.handle('rag:searchDocuments', async (_event, { query, docIds }) => {
+    return ragService.searchDocuments(query, docIds);
+  });
+
+  ipcMain.handle('rag:getSidecarStatus', async () => {
+    return getSidecarStatus();
   });
 
   // Cowork IPC handlers
@@ -2486,6 +2513,7 @@ if (!gotTheLock) {
     console.log('[Main] App is quitting, starting cleanup...');
     destroyTray();
     skillManager?.stopWatching();
+    stopSidecar();
 
     // Stop Cowork sessions without blocking shutdown.
     if (coworkRunner) {
@@ -2626,6 +2654,20 @@ if (!gotTheLock) {
       console.log('[Main] initApp: skill services started');
     } catch (error) {
       console.error('[Main] initApp: skill services failed:', error);
+    }
+
+    // Start RAG sidecar (non-critical)
+    try {
+      const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
+      const ragEnv: Record<string, string> = {};
+      const currentApiConfig = resolveCurrentApiConfig();
+      if (currentApiConfig?.apiKey) ragEnv['OPENAI_API_KEY'] = currentApiConfig.apiKey;
+      startSidecar(ragDbPath, ragEnv).catch((err) => {
+        console.error('[Main] initApp: RAG sidecar failed:', err);
+      });
+      console.log('[Main] initApp: RAG sidecar start initiated');
+    } catch (error) {
+      console.error('[Main] initApp: RAG sidecar setup failed:', error);
     }
 
     const appConfig = getStore().get<AppConfigSettings>('app_config');
