@@ -6,6 +6,7 @@ import mcpReducer from './slices/mcpSlice';
 import imReducer from './slices/imSlice';
 import quickActionReducer from './slices/quickActionSlice';
 import scheduledTaskReducer from './slices/scheduledTaskSlice';
+import ragReducer from './slices/ragSlice';
 
 export const store = configureStore({
   reducer: {
@@ -16,6 +17,7 @@ export const store = configureStore({
     im: imReducer,
     quickAction: quickActionReducer,
     scheduledTask: scheduledTaskReducer,
+    rag: ragReducer,
   },
 });
 
