@@ -979,6 +979,17 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
   env.LOBSTERAI_ELECTRON_PATH = process.execPath.replace(/\\/g, '/');
 
+  // Inject RAG sidecar port for knowledge base skill
+  try {
+    const { getSidecarStatus } = require('./pageindexSidecar');
+    const ragStatus = getSidecarStatus();
+    if (ragStatus.running) {
+      env.RAG_PORT = String(ragStatus.port);
+    }
+  } catch {
+    // pageindexSidecar not available yet
+  }
+
   // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)
   const internalApiBaseURL = getInternalApiBaseURL();
   if (internalApiBaseURL) {
