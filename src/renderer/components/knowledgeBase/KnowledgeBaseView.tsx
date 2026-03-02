@@ -21,7 +21,7 @@ const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   isSidebarCollapsed,
   onToggleSidebar,
   onNewChat,
-  onBack,
+  // onBack reserved for future navigation
   updateBadge,
 }) => {
   const isMac = window.electron.platform === 'darwin';

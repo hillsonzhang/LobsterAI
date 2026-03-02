@@ -225,6 +225,14 @@ interface IElectronAPI {
     delete: (id: string) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
     setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; servers?: McpServerConfigIPC[]; error?: string }>;
   };
+  rag: {
+    uploadDocument: (filePath: string, type: string) => Promise<any>;
+    listDocuments: (limit?: number, offset?: number) => Promise<any>;
+    deleteDocument: (docId: string) => Promise<any>;
+    getDocumentStatus: (docId: string) => Promise<any>;
+    searchDocuments: (query: string, docIds?: string[]) => Promise<any>;
+    getSidecarStatus: () => Promise<{ running: boolean; port: number }>;
+  };
   api: {
     fetch: (options: {
       url: string;

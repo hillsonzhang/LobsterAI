@@ -2660,7 +2660,7 @@ if (!gotTheLock) {
     try {
       const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
       const ragEnv: Record<string, string> = {};
-      const currentApiConfig = resolveCurrentApiConfig();
+      const currentApiConfig = resolveCurrentApiConfig()?.config;
       if (currentApiConfig?.apiKey) ragEnv['OPENAI_API_KEY'] = currentApiConfig.apiKey;
       startSidecar(ragDbPath, ragEnv).catch((err) => {
         console.error('[Main] initApp: RAG sidecar failed:', err);
