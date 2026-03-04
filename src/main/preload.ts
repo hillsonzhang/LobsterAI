@@ -40,12 +40,32 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('rag:listDocuments', { limit, offset }),
     deleteDocument: (docId: string) =>
       ipcRenderer.invoke('rag:deleteDocument', { docId }),
+    retryIndex: (docId: string) =>
+      ipcRenderer.invoke('rag:retryIndex', { docId }),
     getDocumentStatus: (docId: string) =>
       ipcRenderer.invoke('rag:getDocumentStatus', { docId }),
     searchDocuments: (query: string, docIds?: string[]) =>
       ipcRenderer.invoke('rag:searchDocuments', { query, docIds }),
     getSidecarStatus: () =>
       ipcRenderer.invoke('rag:getSidecarStatus'),
+    getEmbeddingConfig: () =>
+      ipcRenderer.invoke('rag:getEmbeddingConfig'),
+    setEmbeddingConfig: (config: { apiBase: string; apiKey: string; model: string; dim: number }) =>
+      ipcRenderer.invoke('rag:setEmbeddingConfig', config),
+    restartSidecar: () =>
+      ipcRenderer.invoke('rag:restartSidecar'),
+    testEmbedding: () =>
+      ipcRenderer.invoke('rag:testEmbedding'),
+    getLlmConfig: () =>
+      ipcRenderer.invoke('rag:getLlmConfig'),
+    setLlmConfig: (config: { apiBase: string; apiKey: string; model: string }) =>
+      ipcRenderer.invoke('rag:setLlmConfig', config),
+    testLlm: () =>
+      ipcRenderer.invoke('rag:testLlm'),
+    getRerankerConfig: () =>
+      ipcRenderer.invoke('rag:getRerankerConfig'),
+    setRerankerConfig: (config: { enabled: boolean; apiBase: string; apiKey: string; model: string }) =>
+      ipcRenderer.invoke('rag:setRerankerConfig', config),
   },
   permissions: {
     checkCalendar: () => ipcRenderer.invoke('permissions:checkCalendar'),

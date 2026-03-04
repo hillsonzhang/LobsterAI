@@ -7,8 +7,11 @@ import {
   setSidecarStatus,
   setUploading,
   setLoading,
+  setEmbeddingConfig,
+  setLlmConfig,
+  setRerankerConfig,
 } from '../store/slices/ragSlice';
-import type { RagDocument } from '../store/slices/ragSlice';
+import type { RagDocument, EmbeddingConfig, LlmConfig, RerankerConfig } from '../store/slices/ragSlice';
 
 class KnowledgeBaseService {
   private pollingTimers: Map<string, ReturnType<typeof setInterval>> = new Map();
@@ -21,7 +24,7 @@ class KnowledgeBaseService {
         store.dispatch(setDocuments(result.documents));
         // Start polling for any processing documents
         for (const doc of result.documents) {
-          if (doc.status === 'pending' || doc.status === 'processing') {
+          if (doc.status === 'processing') {
             this.startPollingStatus(doc.id);
           }
         }
@@ -44,7 +47,7 @@ class KnowledgeBaseService {
     store.dispatch(setUploading(true));
     try {
       const ext = filePath.split('.').pop()?.toLowerCase();
-      const type = ext === 'md' ? 'md' : 'pdf';
+      const type = ext === 'md' ? 'md' : ext === 'txt' ? 'txt' : 'pdf';
       const result = await window.electron?.rag?.uploadDocument(filePath, type);
       if (result?.doc_id) {
         const doc: RagDocument = {
@@ -62,6 +65,17 @@ class KnowledgeBaseService {
       }
     } finally {
       store.dispatch(setUploading(false));
+    }
+  }
+
+  async retryIndex(docId: string): Promise<void> {
+    try {
+      await window.electron?.rag?.retryIndex(docId);
+      store.dispatch(updateDocumentStatus({ id: docId, status: 'processing' }));
+      this.startPollingStatus(docId);
+    } catch (e: any) {
+      console.error('[KnowledgeBase] retryIndex failed:', e);
+      throw e;
     }
   }
 
@@ -99,6 +113,76 @@ class KnowledgeBaseService {
     if (timer) {
       clearInterval(timer);
       this.pollingTimers.delete(docId);
+    }
+  }
+
+  async loadEmbeddingConfig(): Promise<void> {
+    try {
+      const config = await window.electron?.rag?.getEmbeddingConfig();
+      store.dispatch(setEmbeddingConfig(config || null));
+    } catch {
+      // ignore
+    }
+  }
+
+  async saveEmbeddingConfig(config: EmbeddingConfig): Promise<void> {
+    await window.electron?.rag?.setEmbeddingConfig(config);
+    store.dispatch(setEmbeddingConfig(config));
+  }
+
+  async testEmbedding(): Promise<{ success: boolean; error?: string }> {
+    try {
+      return await window.electron?.rag?.testEmbedding() || { success: false, error: 'IPC unavailable' };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  async loadLlmConfig(): Promise<void> {
+    try {
+      const config = await window.electron?.rag?.getLlmConfig();
+      store.dispatch(setLlmConfig(config || null));
+    } catch {
+      // ignore
+    }
+  }
+
+  async saveLlmConfig(config: LlmConfig): Promise<void> {
+    await window.electron?.rag?.setLlmConfig(config);
+    store.dispatch(setLlmConfig(config));
+  }
+
+  async testLlm(): Promise<{ success: boolean; error?: string }> {
+    try {
+      return await window.electron?.rag?.testLlm() || { success: false, error: 'IPC unavailable' };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  async loadRerankerConfig(): Promise<void> {
+    try {
+      const config = await window.electron?.rag?.getRerankerConfig();
+      store.dispatch(setRerankerConfig(config || null));
+    } catch {
+      // ignore
+    }
+  }
+
+  async saveRerankerConfig(config: RerankerConfig): Promise<void> {
+    await window.electron?.rag?.setRerankerConfig(config);
+    store.dispatch(setRerankerConfig(config));
+  }
+
+  async restartSidecar(): Promise<void> {
+    store.dispatch(setSidecarStatus('starting'));
+    try {
+      await window.electron?.rag?.restartSidecar();
+      // Wait a moment for sidecar to start, then check status
+      await new Promise(r => setTimeout(r, 2000));
+      await this.checkSidecarStatus();
+    } catch {
+      store.dispatch(setSidecarStatus('error'));
     }
   }
 

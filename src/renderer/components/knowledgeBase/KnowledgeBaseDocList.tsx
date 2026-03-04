@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TrashIcon, DocumentTextIcon, DocumentIcon } from '@heroicons/react/24/outline';
+import { TrashIcon, DocumentTextIcon, DocumentIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
 import type { RagDocument } from '../../store/slices/ragSlice';
 
@@ -7,23 +7,23 @@ interface KnowledgeBaseDocListProps {
   documents: RagDocument[];
   loading: boolean;
   onDelete: (docId: string) => void;
+  onRetry?: (docId: string) => void;
 }
 
 const statusColors: Record<string, string> = {
-  pending: 'text-yellow-500',
   processing: 'text-blue-500',
   completed: 'text-green-500',
   failed: 'text-red-500',
 };
 
 const statusKeys: Record<string, string> = {
-  pending: 'knowledgeBaseStatusPending',
   processing: 'knowledgeBaseStatusProcessing',
   completed: 'knowledgeBaseStatusCompleted',
   failed: 'knowledgeBaseStatusFailed',
 };
 
-const KnowledgeBaseDocList: React.FC<KnowledgeBaseDocListProps> = ({ documents, loading, onDelete }) => {
+const KnowledgeBaseDocList: React.FC<KnowledgeBaseDocListProps> = ({ documents, loading, onDelete, onRetry }) => {
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   if (loading) {
@@ -104,13 +104,30 @@ const KnowledgeBaseDocList: React.FC<KnowledgeBaseDocListProps> = ({ documents, 
                   </button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmingId(doc.id)}
-                  className="h-7 w-7 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-red-500 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
+                <>
+                  {doc.status === 'failed' && onRetry && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setRetryingId(doc.id);
+                        try { await onRetry(doc.id); } catch { /* handled by service */ }
+                        setRetryingId(null);
+                      }}
+                      disabled={retryingId === doc.id}
+                      className="h-7 w-7 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-blue-500 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+                      title={i18nService.t('knowledgeBaseRetryIndex')}
+                    >
+                      <ArrowPathIcon className={`h-4 w-4 ${retryingId === doc.id ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingId(doc.id)}
+                    className="h-7 w-7 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-red-500 hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </>
               )}
             </div>
           </div>

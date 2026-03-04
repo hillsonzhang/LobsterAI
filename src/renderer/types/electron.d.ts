@@ -1,3 +1,23 @@
+interface EmbeddingConfig {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  dim: number;
+}
+
+interface LlmConfig {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+}
+
+interface RerankerConfig {
+  enabled: boolean;
+  apiBase: string;
+  apiKey: string;
+  model: string;
+}
+
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -229,9 +249,19 @@ interface IElectronAPI {
     uploadDocument: (filePath: string, type: string) => Promise<any>;
     listDocuments: (limit?: number, offset?: number) => Promise<any>;
     deleteDocument: (docId: string) => Promise<any>;
+    retryIndex: (docId: string) => Promise<any>;
     getDocumentStatus: (docId: string) => Promise<any>;
     searchDocuments: (query: string, docIds?: string[]) => Promise<any>;
     getSidecarStatus: () => Promise<{ running: boolean; port: number }>;
+    getEmbeddingConfig: () => Promise<EmbeddingConfig | null>;
+    setEmbeddingConfig: (config: EmbeddingConfig) => Promise<void>;
+    restartSidecar: () => Promise<void>;
+    testEmbedding: () => Promise<{ success: boolean; error?: string }>;
+    getLlmConfig: () => Promise<LlmConfig | null>;
+    setLlmConfig: (config: LlmConfig) => Promise<void>;
+    testLlm: () => Promise<{ success: boolean; error?: string }>;
+    getRerankerConfig: () => Promise<RerankerConfig | null>;
+    setRerankerConfig: (config: RerankerConfig) => Promise<void>;
   };
   api: {
     fetch: (options: {

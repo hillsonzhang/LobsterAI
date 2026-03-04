@@ -8,6 +8,7 @@ import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
+import { getSidecarStatus } from './ragSidecar';
 
 function appendEnvPath(current: string | undefined, additions: string[]): string | undefined {
   const items = new Set<string>();
@@ -981,13 +982,12 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
 
   // Inject RAG sidecar port for knowledge base skill
   try {
-    const { getSidecarStatus } = require('./pageindexSidecar');
     const ragStatus = getSidecarStatus();
     if (ragStatus.running) {
       env.RAG_PORT = String(ragStatus.port);
     }
   } catch {
-    // pageindexSidecar not available yet
+    // ragSidecar not available yet
   }
 
   // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)

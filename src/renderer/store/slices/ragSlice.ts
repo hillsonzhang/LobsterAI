@@ -1,11 +1,31 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+export interface EmbeddingConfig {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  dim: number;
+}
+
+export interface LlmConfig {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+}
+
+export interface RerankerConfig {
+  enabled: boolean;
+  apiBase: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface RagDocument {
   id: string;
   name: string;
   file_path: string;
-  type: 'pdf' | 'md';
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  type: 'pdf' | 'md' | 'txt';
+  status: 'processing' | 'completed' | 'failed';
   nodes_count: number;
   error_message?: string;
   created_at: number;
@@ -17,6 +37,9 @@ interface RagState {
   sidecarStatus: 'starting' | 'running' | 'stopped' | 'error';
   uploading: boolean;
   loading: boolean;
+  embeddingConfig: EmbeddingConfig | null;
+  llmConfig: LlmConfig | null;
+  rerankerConfig: RerankerConfig | null;
 }
 
 const initialState: RagState = {
@@ -24,6 +47,9 @@ const initialState: RagState = {
   sidecarStatus: 'stopped',
   uploading: false,
   loading: false,
+  embeddingConfig: null,
+  llmConfig: null,
+  rerankerConfig: null,
 };
 
 const ragSlice = createSlice({
@@ -56,6 +82,15 @@ const ragSlice = createSlice({
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;
     },
+    setEmbeddingConfig: (state, action: PayloadAction<EmbeddingConfig | null>) => {
+      state.embeddingConfig = action.payload;
+    },
+    setLlmConfig: (state, action: PayloadAction<LlmConfig | null>) => {
+      state.llmConfig = action.payload;
+    },
+    setRerankerConfig: (state, action: PayloadAction<RerankerConfig | null>) => {
+      state.rerankerConfig = action.payload;
+    },
   },
 });
 
@@ -67,6 +102,9 @@ export const {
   setSidecarStatus,
   setUploading,
   setLoading,
+  setEmbeddingConfig,
+  setLlmConfig,
+  setRerankerConfig,
 } = ragSlice.actions;
 
 export default ragSlice.reducer;

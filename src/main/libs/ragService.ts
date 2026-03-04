@@ -1,4 +1,4 @@
-import { getSidecarBaseUrl } from './pageindexSidecar';
+import { getSidecarBaseUrl } from './ragSidecar';
 
 async function sidecarFetch(path: string, options?: RequestInit): Promise<any> {
   const base = getSidecarBaseUrl();
@@ -22,7 +22,13 @@ export async function uploadDocument(filePath: string, type: string): Promise<an
 }
 
 export async function listDocuments(limit = 50, offset = 0): Promise<any> {
+  const base = getSidecarBaseUrl();
+  if (!base) return { documents: [], total: 0 };
   return sidecarFetch(`/documents?limit=${limit}&offset=${offset}`);
+}
+
+export async function retryIndex(docId: string): Promise<any> {
+  return sidecarFetch(`/index/${docId}/retry`, { method: 'POST' });
 }
 
 export async function deleteDocument(docId: string): Promise<any> {

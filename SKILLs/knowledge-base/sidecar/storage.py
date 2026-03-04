@@ -1,5 +1,4 @@
 import sqlite3
-import json
 import uuid
 import time
 from typing import Optional
@@ -29,14 +28,6 @@ class RagStorage:
                     error_message TEXT,
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS rag_trees (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    doc_id TEXT NOT NULL REFERENCES rag_documents(id) ON DELETE CASCADE,
-                    tree_json TEXT NOT NULL,
-                    created_at INTEGER NOT NULL
                 )
             """)
             conn.commit()
@@ -69,27 +60,6 @@ class RagStorage:
         finally:
             conn.close()
 
-    def save_tree(self, doc_id: str, tree_json: str):
-        now = int(time.time() * 1000)
-        conn = self._get_conn()
-        try:
-            conn.execute("DELETE FROM rag_trees WHERE doc_id = ?", (doc_id,))
-            conn.execute(
-                "INSERT INTO rag_trees (doc_id, tree_json, created_at) VALUES (?, ?, ?)",
-                (doc_id, tree_json, now)
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-    def get_tree(self, doc_id: str) -> Optional[str]:
-        conn = self._get_conn()
-        try:
-            row = conn.execute("SELECT tree_json FROM rag_trees WHERE doc_id = ?", (doc_id,)).fetchone()
-            return row["tree_json"] if row else None
-        finally:
-            conn.close()
-
     def get_document(self, doc_id: str) -> Optional[dict]:
         conn = self._get_conn()
         try:
@@ -116,5 +86,17 @@ class RagStorage:
             cursor = conn.execute("DELETE FROM rag_documents WHERE id = ?", (doc_id,))
             conn.commit()
             return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def reset_all_document_status(self):
+        """Reset all completed documents to pending (needs re-indexing)."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "UPDATE rag_documents SET status = 'pending', updated_at = ? WHERE status = 'completed'",
+                (int(time.time() * 1000),)
+            )
+            conn.commit()
         finally:
             conn.close()

@@ -26,7 +26,7 @@ import { initLogger, getLogFilePath } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
-import { startSidecar, stopSidecar, getSidecarStatus } from './libs/pageindexSidecar';
+import { startSidecar, stopSidecar, getSidecarStatus, restartSidecar } from './libs/ragSidecar';
 import * as ragService from './libs/ragService';
 import {
   applySystemProxyEnv,
@@ -1208,6 +1208,10 @@ if (!gotTheLock) {
     return ragService.deleteDocument(docId);
   });
 
+  ipcMain.handle('rag:retryIndex', async (_event, { docId }) => {
+    return ragService.retryIndex(docId);
+  });
+
   ipcMain.handle('rag:getDocumentStatus', async (_event, { docId }) => {
     return ragService.getDocumentStatus(docId);
   });
@@ -1218,6 +1222,93 @@ if (!gotTheLock) {
 
   ipcMain.handle('rag:getSidecarStatus', async () => {
     return getSidecarStatus();
+  });
+
+  function buildRagEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    const embed = getStore().get<any>('rag_embedding_config');
+    if (embed) {
+      env.EMBED_API_BASE = embed.apiBase || '';
+      env.EMBED_API_KEY = embed.apiKey || '';
+      env.EMBED_MODEL = embed.model || '';
+      env.EMBED_DIM = String(embed.dim || 1536);
+    }
+    const llm = getStore().get<any>('rag_llm_config');
+    if (llm) {
+      env.LLM_API_BASE = llm.apiBase || '';
+      env.LLM_API_KEY = llm.apiKey || '';
+      env.LLM_MODEL = llm.model || '';
+    }
+    env.ENABLE_LLM_CACHE_FOR_EXTRACT = 'true';
+    const reranker = getStore().get<any>('rag_reranker_config');
+    if (reranker?.enabled) {
+      env.RERANK_ENABLED = 'true';
+      env.RERANK_API_BASE = reranker.apiBase || '';
+      env.RERANK_API_KEY = reranker.apiKey || '';
+      env.RERANK_MODEL = reranker.model || '';
+    }
+    return env;
+  }
+
+  ipcMain.handle('rag:getEmbeddingConfig', async () => {
+    return getStore().get<any>('rag_embedding_config') || null;
+  });
+
+  ipcMain.handle('rag:setEmbeddingConfig', async (_event, config: { apiBase: string; apiKey: string; model: string; dim: number }) => {
+    getStore().set('rag_embedding_config', config);
+    const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
+    await restartSidecar(ragDbPath, buildRagEnv());
+  });
+
+  ipcMain.handle('rag:restartSidecar', async () => {
+    const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
+    await restartSidecar(ragDbPath, buildRagEnv());
+  });
+
+  ipcMain.handle('rag:testEmbedding', async () => {
+    const sidecar = getSidecarStatus();
+    if (!sidecar.running || !sidecar.port) {
+      return { success: false, error: 'Sidecar not running' };
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${sidecar.port}/embedding/test`);
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
+  ipcMain.handle('rag:getLlmConfig', async () => {
+    return getStore().get<any>('rag_llm_config') || null;
+  });
+
+  ipcMain.handle('rag:setLlmConfig', async (_event, config: { apiBase: string; apiKey: string; model: string }) => {
+    getStore().set('rag_llm_config', config);
+    const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
+    await restartSidecar(ragDbPath, buildRagEnv());
+  });
+
+  ipcMain.handle('rag:testLlm', async () => {
+    const sidecar = getSidecarStatus();
+    if (!sidecar.running || !sidecar.port) {
+      return { success: false, error: 'Sidecar not running' };
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${sidecar.port}/llm/test`);
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
+  ipcMain.handle('rag:getRerankerConfig', async () => {
+    return getStore().get<any>('rag_reranker_config') || null;
+  });
+
+  ipcMain.handle('rag:setRerankerConfig', async (_event, config: { enabled: boolean; apiBase: string; apiKey: string; model: string }) => {
+    getStore().set('rag_reranker_config', config);
+    const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
+    await restartSidecar(ragDbPath, buildRagEnv());
   });
 
   // Cowork IPC handlers
@@ -2659,10 +2750,7 @@ if (!gotTheLock) {
     // Start RAG sidecar (non-critical)
     try {
       const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
-      const ragEnv: Record<string, string> = {};
-      const currentApiConfig = resolveCurrentApiConfig()?.config;
-      if (currentApiConfig?.apiKey) ragEnv['OPENAI_API_KEY'] = currentApiConfig.apiKey;
-      startSidecar(ragDbPath, ragEnv).catch((err) => {
+      startSidecar(ragDbPath, buildRagEnv()).catch((err) => {
         console.error('[Main] initApp: RAG sidecar failed:', err);
       });
       console.log('[Main] initApp: RAG sidecar start initiated');

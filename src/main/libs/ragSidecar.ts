@@ -1,12 +1,15 @@
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import { app } from 'electron';
 import path from 'path';
 import net from 'net';
+import fs from 'fs';
+import { appendPythonRuntimeToEnv, getUserPythonRoot } from './pythonRuntime';
 
 let sidecarProcess: ChildProcess | null = null;
 let sidecarPort: number = 0;
 let sidecarReady = false;
 let restartCount = 0;
+let depsInstalled = false;
 const MAX_RESTARTS = 3;
 
 function getSkillsRoot(): string {
@@ -16,7 +19,60 @@ function getSkillsRoot(): string {
 }
 
 function getSidecarDir(): string {
-  return path.join(getSkillsRoot(), 'pageindex-rag', 'sidecar');
+  return path.join(getSkillsRoot(), 'knowledge-base', 'sidecar');
+}
+
+/**
+ * Resolve the Python executable command.
+ * On Windows, use the built-in runtime's python.exe; on macOS/Linux, use python3.
+ */
+function getPythonCommand(): string {
+  if (process.platform === 'win32') {
+    // Try built-in runtime first
+    const userRoot = getUserPythonRoot();
+    const candidates = [
+      path.join(userRoot, 'python.exe'),
+      path.join(userRoot, 'python3.exe'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    // Fallback to PATH
+    return 'python';
+  }
+  return 'python3';
+}
+
+/**
+ * Ensure sidecar pip dependencies are installed.
+ * Runs `pip install --user -r requirements.txt` once per app session.
+ */
+function ensureDeps(pythonCmd: string, sidecarDir: string, env: Record<string, string>): void {
+  if (depsInstalled) return;
+
+  const reqFile = path.join(sidecarDir, 'requirements.txt');
+  if (!fs.existsSync(reqFile)) return;
+
+  console.log('[RAG Sidecar] Installing pip dependencies...');
+  // Use --user on Windows (no admin rights); omit on macOS/Linux (conda/venv may reject it)
+  const args = process.platform === 'win32'
+    ? ['-m', 'pip', 'install', '--user', '-q', '-r', reqFile]
+    : ['-m', 'pip', 'install', '-q', '-r', reqFile];
+  const result = spawnSync(pythonCmd, args, {
+    cwd: sidecarDir,
+    env,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    timeout: 120_000,
+  });
+
+  if (result.status === 0) {
+    console.log('[RAG Sidecar] pip dependencies installed');
+    depsInstalled = true;
+  } else {
+    const err = (result.stderr || result.stdout || '').trim();
+    console.error(`[RAG Sidecar] pip install failed (exit ${result.status}): ${err.slice(0, 500)}`);
+  }
 }
 
 async function findFreePort(): Promise<number> {
@@ -63,24 +119,43 @@ export async function startSidecar(dbPath: string, env?: Record<string, string>)
     ...process.env as Record<string, string>,
     RAG_DB_PATH: dbPath,
     RAG_PORT: String(port),
+    RAG_WORKING_DIR: path.join(app.getPath('userData'), 'lightrag_data'),
     ...env,
   };
 
-  sidecarProcess = spawn('python3', [appPy], {
+  // Ensure built-in Python is in PATH on Windows
+  if (process.platform === 'win32') {
+    appendPythonRuntimeToEnv(childEnv);
+  }
+
+  const pythonCmd = getPythonCommand();
+  console.log(`[RAG Sidecar] Python command: ${pythonCmd}`);
+
+  // Install pip dependencies if needed (all platforms)
+  try {
+    ensureDeps(pythonCmd, sidecarDir, childEnv);
+  } catch (e) {
+    console.error('[RAG Sidecar] ensureDeps threw:', e);
+  }
+
+  const proc = spawn(pythonCmd, [appPy], {
     cwd: sidecarDir,
     env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  sidecarProcess = proc;
 
   let stderr = '';
-  sidecarProcess.stderr?.on('data', (chunk) => {
+  proc.stderr?.on('data', (chunk) => {
     stderr += chunk.toString();
     // Keep only last 8KB
     if (stderr.length > 8192) stderr = stderr.slice(-8192);
   });
 
-  sidecarProcess.on('exit', (code) => {
+  proc.on('exit', (code) => {
     console.log(`[RAG Sidecar] exited with code ${code}`);
+    // Only update state if this is still the active process
+    if (sidecarProcess !== proc) return;
     sidecarProcess = null;
     sidecarReady = false;
 
@@ -109,6 +184,12 @@ export function stopSidecar(): void {
   }
   sidecarReady = false;
   sidecarPort = 0;
+}
+
+export async function restartSidecar(dbPath: string, env?: Record<string, string>): Promise<void> {
+  stopSidecar();
+  restartCount = 0;
+  await startSidecar(dbPath, env);
 }
 
 export function getSidecarStatus(): { running: boolean; port: number } {
