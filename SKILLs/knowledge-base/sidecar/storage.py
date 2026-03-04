@@ -23,7 +23,7 @@ class RagStorage:
                     name TEXT NOT NULL,
                     file_path TEXT NOT NULL,
                     type TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
+                    status TEXT DEFAULT 'processing',
                     nodes_count INTEGER DEFAULT 0,
                     error_message TEXT,
                     created_at INTEGER NOT NULL,
@@ -40,11 +40,11 @@ class RagStorage:
         conn = self._get_conn()
         try:
             conn.execute(
-                "INSERT INTO rag_documents (id, name, file_path, type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+                "INSERT INTO rag_documents (id, name, file_path, type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'processing', ?, ?)",
                 (doc_id, name, file_path, doc_type, now, now)
             )
             conn.commit()
-            return {"id": doc_id, "name": name, "file_path": file_path, "type": doc_type, "status": "pending", "nodes_count": 0, "created_at": now, "updated_at": now}
+            return {"id": doc_id, "name": name, "file_path": file_path, "type": doc_type, "status": "processing", "nodes_count": 0, "created_at": now, "updated_at": now}
         finally:
             conn.close()
 
@@ -90,11 +90,11 @@ class RagStorage:
             conn.close()
 
     def reset_all_document_status(self):
-        """Reset all completed documents to pending (needs re-indexing)."""
+        """Reset all completed documents to failed (needs re-indexing via retry)."""
         conn = self._get_conn()
         try:
             conn.execute(
-                "UPDATE rag_documents SET status = 'pending', updated_at = ? WHERE status = 'completed'",
+                "UPDATE rag_documents SET status = 'failed', error_message = 'Needs re-indexing after migration', updated_at = ? WHERE status = 'completed'",
                 (int(time.time() * 1000),)
             )
             conn.commit()

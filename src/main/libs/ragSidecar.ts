@@ -146,6 +146,10 @@ export async function startSidecar(dbPath: string, env?: Record<string, string>)
   sidecarProcess = proc;
 
   let stderr = '';
+  proc.stdout?.on('data', (chunk) => {
+    const lines = chunk.toString().trim();
+    if (lines) console.log(`[RAG Sidecar:py] ${lines}`);
+  });
   proc.stderr?.on('data', (chunk) => {
     stderr += chunk.toString();
     // Keep only last 8KB

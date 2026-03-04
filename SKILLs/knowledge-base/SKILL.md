@@ -34,7 +34,7 @@ metadata:
 ### 1. 快速搜索（默认使用）
 
 ```bash
-curl -s http://127.0.0.1:${RAG_PORT}/search \
+curl -s http://127.0.0.1:$RAG_PORT/search \
   -H "Content-Type: application/json" \
   -d '{"query": "搜索问题", "top_k": 5, "mode": "fast"}'
 ```
@@ -44,7 +44,7 @@ curl -s http://127.0.0.1:${RAG_PORT}/search \
 ### 2. 深度搜索（仅用户明确要求时）
 
 ```bash
-curl -s --max-time 120 http://127.0.0.1:${RAG_PORT}/search \
+curl -s --max-time 120 http://127.0.0.1:$RAG_PORT/search \
   -H "Content-Type: application/json" \
   -d '{"query": "搜索问题", "top_k": 10, "mode": "deep"}'
 ```
@@ -56,14 +56,14 @@ curl -s --max-time 120 http://127.0.0.1:${RAG_PORT}/search \
 直接上传文件并自动索引，支持 PDF、Markdown、TXT：
 
 ```bash
-curl -s http://127.0.0.1:${RAG_PORT}/upload \
+curl -s http://127.0.0.1:$RAG_PORT/upload \
   -F "file=@/path/to/document.pdf"
 ```
 
 可选指定文件类型（默认按扩展名自动判断）：
 
 ```bash
-curl -s http://127.0.0.1:${RAG_PORT}/upload \
+curl -s http://127.0.0.1:$RAG_PORT/upload \
   -F "file=@/path/to/notes.txt" \
   -F "type=txt"
 ```
@@ -77,7 +77,7 @@ curl -s http://127.0.0.1:${RAG_PORT}/upload \
 如果文件已在本地磁盘上，可直接传路径索引：
 
 ```bash
-curl -s http://127.0.0.1:${RAG_PORT}/index \
+curl -s http://127.0.0.1:$RAG_PORT/index \
   -H "Content-Type: application/json" \
   -d '{"path": "/absolute/path/to/document.pdf", "type": "pdf"}'
 ```
@@ -87,7 +87,7 @@ curl -s http://127.0.0.1:${RAG_PORT}/index \
 ### 5. 查询索引状态 (index_status)
 
 ```bash
-curl -s "http://127.0.0.1:${RAG_PORT}/index/{doc_id}/status"
+curl -s "http://127.0.0.1:$RAG_PORT/index/{doc_id}/status"
 ```
 
 返回格式：`{"status": "processing|completed|failed", "nodes_count": 0, "error_message": null}`
@@ -97,7 +97,7 @@ curl -s "http://127.0.0.1:${RAG_PORT}/index/{doc_id}/status"
 查看知识库中所有文档：
 
 ```bash
-curl -s "http://127.0.0.1:${RAG_PORT}/documents?limit=50&offset=0"
+curl -s "http://127.0.0.1:$RAG_PORT/documents?limit=50&offset=0"
 ```
 
 ### 7. 删除文档 (delete_document)
@@ -105,7 +105,7 @@ curl -s "http://127.0.0.1:${RAG_PORT}/documents?limit=50&offset=0"
 删除文档及其索引（删除后剩余文档会异步重建索引）：
 
 ```bash
-curl -s -X DELETE "http://127.0.0.1:${RAG_PORT}/documents/{doc_id}"
+curl -s -X DELETE "http://127.0.0.1:$RAG_PORT/documents/{doc_id}"
 ```
 
 ## 使用原则
@@ -120,7 +120,8 @@ curl -s -X DELETE "http://127.0.0.1:${RAG_PORT}/documents/{doc_id}"
 
 ## 注意事项
 
-- `RAG_PORT` 环境变量由 SD Agent 自动设置
+- `RAG_PORT` 环境变量由系统自动设置，直接使用 `$RAG_PORT` 即可
+- **禁止**使用 `${RAG_PORT:?...}` 等高级 shell 语法，只用 `$RAG_PORT` 或 `$RAG_PORT`
 - 索引需要 Embedding API 和 LLM API 都配置好
 - 索引是异步的，大文档可能需要较长时间
 - Embedding API 和 LLM API 需要在知识库页面分别配置

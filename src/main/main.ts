@@ -1283,9 +1283,12 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('rag:setLlmConfig', async (_event, config: { apiBase: string; apiKey: string; model: string }) => {
+    console.log('[Main] rag:setLlmConfig called', { apiBase: config.apiBase, model: config.model, hasKey: !!config.apiKey });
     getStore().set('rag_llm_config', config);
     const ragDbPath = path.join(app.getPath('userData'), 'rag.sqlite');
-    await restartSidecar(ragDbPath, buildRagEnv());
+    const env = buildRagEnv();
+    console.log('[Main] buildRagEnv LLM:', { LLM_API_BASE: env.LLM_API_BASE, LLM_MODEL: env.LLM_MODEL, hasLLM_KEY: !!env.LLM_API_KEY });
+    await restartSidecar(ragDbPath, env);
   });
 
   ipcMain.handle('rag:testLlm', async () => {

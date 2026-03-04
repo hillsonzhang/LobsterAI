@@ -74,7 +74,7 @@ def _create_lightrag():
             func=_embed_func,
         ),
         vector_storage="FaissVectorDBStorage",
-        enable_llm_cache_for_extract=(ENABLE_LLM_CACHE == "true"),
+        enable_llm_cache_for_entity_extract=(ENABLE_LLM_CACHE == "true"),
         chunk_token_size=500,
         chunk_overlap_token_size=100,
         embedding_batch_num=32,
@@ -109,7 +109,6 @@ async def lifespan(app: FastAPI):
         try:
             rag = _create_lightrag()
             await rag.initialize_storages()
-            await rag.initialize_pipeline_status()
             print(f"[RAG] LightRAG ready: llm={LLM_MODEL}, embed={EMBED_MODEL}, dim={EMBED_DIM}")
 
             # Reranker config
@@ -205,9 +204,8 @@ async def _rebuild_all(documents: list[dict]):
                 shutil.rmtree(lightrag_dir)
             rag = _create_lightrag()
             await rag.initialize_storages()
-            await rag.initialize_pipeline_status()
             for doc in documents:
-                if doc.get("status") in ("completed", "pending") and os.path.exists(doc.get("file_path", "")):
+                if doc.get("status") in ("completed", "failed") and os.path.exists(doc.get("file_path", "")):
                     await _index_document(doc["id"], doc["file_path"], doc["type"])
         except Exception as e:
             print(f"[RAG] Rebuild failed: {e}")

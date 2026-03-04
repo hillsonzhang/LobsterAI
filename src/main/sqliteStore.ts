@@ -233,7 +233,7 @@ export class SqliteStore {
         name TEXT NOT NULL,
         file_path TEXT NOT NULL,
         type TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
+        status TEXT DEFAULT 'processing',
         nodes_count INTEGER DEFAULT 0,
         error_message TEXT,
         created_at INTEGER NOT NULL,

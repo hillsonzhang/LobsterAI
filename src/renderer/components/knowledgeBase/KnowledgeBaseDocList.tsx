@@ -69,8 +69,8 @@ const KnowledgeBaseDocList: React.FC<KnowledgeBaseDocListProps> = ({ documents, 
                   {doc.name}
                 </p>
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs ${statusColors[doc.status] || ''}`}>
-                    {i18nService.t(statusKeys[doc.status] || '')}
+                  <span className={`text-xs ${statusColors[doc.status] || 'text-gray-500'}`}>
+                    {statusKeys[doc.status] ? i18nService.t(statusKeys[doc.status]) : doc.status}
                   </span>
                   {doc.status === 'completed' && doc.nodes_count > 0 && (
                     <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">

@@ -183,9 +183,8 @@ const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
 );
-const ABOUT_CONTACT_EMAIL = 'lobsterai.project@rd.netease.com';
-const ABOUT_USER_MANUAL_URL = 'https://lobsterai.youdao.com/#/docs/lobsterai_user_manual';
-const ABOUT_SERVICE_TERMS_URL = 'https://c.youdao.com/dict/hardware/lobsterai/lobsterai_service.html';
+const ABOUT_CONTACT_EMAIL = 'sd-agent@sf-supply.com';
+const ABOUT_USER_MANUAL_URL = '';
 
 const copyTextFallback = (text: string): boolean => {
   const textarea = document.createElement('textarea');
@@ -2671,7 +2670,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             {/* Logo & App Name */}
             <img
               src="logo.png"
-              alt="LobsterAI"
+              alt="SD Agent"
               className="w-16 h-16 mb-3 cursor-pointer select-none"
               onClick={() => {
                 const next = logoClickCount + 1;
@@ -2681,7 +2680,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 }
               }}
             />
-            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">LobsterAI</h3>
+            <h3 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">SD Agent</h3>
             <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-1">v{appVersion}</span>
 
             {/* Info Card */}
@@ -2747,39 +2746,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             </div>
 
             {/* Footer */}
-            <div className="mt-auto w-full pt-14 pb-2 flex flex-col items-center">
-              <div className="flex items-center justify-center text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenServiceTerms();
-                  }}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                >
-                  {i18nService.t('aboutServiceTerms')}
-                </button>
-                <span className="mx-3 text-xs opacity-40">|</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleExportLogs();
-                  }}
-                  disabled={isExportingLogs}
-                  className="bg-transparent border-none appearance-none px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded-md cursor-pointer hover:text-claude-accent dark:hover:text-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isExportingLogs ? i18nService.t('aboutExportingLogs') : i18nService.t('aboutExportLogs')}
-                </button>
-              </div>
-
-              <p className="mt-5 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {language === 'zh' ? '网易有道 版权所有' : 'NetEase Youdao. All rights reserved.'}
-              </p>
-              <p className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                Copyright &copy; {new Date().getFullYear()} NetEase Youdao. All Rights Reserved.
-              </p>
-            </div>
+            <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mt-6">
+              &copy; {new Date().getFullYear()} SF Supply
+            </p>
           </div>
         );
 

@@ -721,15 +721,15 @@ const downloadGithubArchive = async (
     archiveUrlCandidates.push(
       {
         url: `https://github.com/${source.owner}/${source.repo}/archive/refs/heads/${encodedRef}.zip`,
-        headers: { 'User-Agent': 'LobsterAI Skill Downloader' },
+        headers: { 'User-Agent': 'SD Agent Skill Downloader' },
       },
       {
         url: `https://github.com/${source.owner}/${source.repo}/archive/refs/tags/${encodedRef}.zip`,
-        headers: { 'User-Agent': 'LobsterAI Skill Downloader' },
+        headers: { 'User-Agent': 'SD Agent Skill Downloader' },
       },
       {
         url: `https://github.com/${source.owner}/${source.repo}/archive/${encodedRef}.zip`,
-        headers: { 'User-Agent': 'LobsterAI Skill Downloader' },
+        headers: { 'User-Agent': 'SD Agent Skill Downloader' },
       }
     );
   }
@@ -738,7 +738,7 @@ const downloadGithubArchive = async (
     url: `https://api.github.com/repos/${source.owner}/${source.repo}/zipball${encodedRef ? `/${encodedRef}` : ''}`,
     headers: {
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'LobsterAI Skill Downloader',
+      'User-Agent': 'SD Agent Skill Downloader',
       'X-GitHub-Api-Version': '2022-11-28',
     },
   });
@@ -1263,14 +1263,14 @@ export class SkillManager {
               const archiveMessage = extractErrorMessage(archiveError);
               if (errno === 'ENOENT' && process.platform === 'win32') {
                 throw new Error(
-                  'Git executable not found. Please install Git for Windows or reinstall LobsterAI with bundled PortableGit.'
+                  'Git executable not found. Please install Git for Windows or reinstall SD Agent with bundled PortableGit.'
                   + ` Archive fallback also failed: ${archiveMessage}`
                 );
               }
               throw new Error(`Git clone failed: ${gitMessage}. Archive fallback failed: ${archiveMessage}`);
             }
           } else if (errno === 'ENOENT' && process.platform === 'win32') {
-            throw new Error('Git executable not found. Please install Git for Windows or reinstall LobsterAI with bundled PortableGit.');
+            throw new Error('Git executable not found. Please install Git for Windows or reinstall SD Agent with bundled PortableGit.');
           } else {
             throw error;
           }
