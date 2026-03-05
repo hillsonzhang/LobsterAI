@@ -1,3 +1,5 @@
+// RAG config types — canonical definitions in store/slices/ragSlice.ts
+// Re-declared here for use in IElectronAPI without import (global .d.ts)
 interface EmbeddingConfig {
   apiBase: string;
   apiKey: string;
@@ -271,12 +273,12 @@ interface IElectronAPI {
     fetchMarketplace: () => Promise<{ success: boolean; data?: McpMarketplaceData; error?: string }>;
   };
   rag: {
-    uploadDocument: (filePath: string, type: string) => Promise<any>;
-    listDocuments: (limit?: number, offset?: number) => Promise<any>;
-    deleteDocument: (docId: string) => Promise<any>;
-    retryIndex: (docId: string) => Promise<any>;
-    getDocumentStatus: (docId: string) => Promise<any>;
-    searchDocuments: (query: string, docIds?: string[]) => Promise<any>;
+    uploadDocument: (filePath: string, type: string) => Promise<{ doc_id: string; name?: string; status: string }>;
+    listDocuments: (limit?: number, offset?: number) => Promise<{ documents: Array<{ id: string; name: string; file_path: string; type: string; status: string; nodes_count: number; error_message: string | null; created_at: number; updated_at: number }>; total: number }>;
+    deleteDocument: (docId: string) => Promise<{ success: boolean }>;
+    retryIndex: (docId: string) => Promise<{ doc_id: string; status: string }>;
+    getDocumentStatus: (docId: string) => Promise<{ status: string; nodes_count: number; error_message: string | null }>;
+    searchDocuments: (query: string, docIds?: string[]) => Promise<{ mode: string; result?: string; context?: string }>;
     getSidecarStatus: () => Promise<{ running: boolean; port: number }>;
     getEmbeddingConfig: () => Promise<EmbeddingConfig | null>;
     setEmbeddingConfig: (config: EmbeddingConfig) => Promise<void>;

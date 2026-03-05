@@ -570,7 +570,13 @@ const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
           </div>
 
           <KnowledgeBaseUpload
-            onUpload={(filePath) => knowledgeBaseService.uploadDocument(filePath)}
+            onUpload={async (filePath) => {
+              try {
+                await knowledgeBaseService.uploadDocument(filePath);
+              } catch (e: any) {
+                console.error('[KnowledgeBase] Upload failed:', e);
+              }
+            }}
             disabled={sidecarStatus !== 'running'}
           />
           <KnowledgeBaseDocList

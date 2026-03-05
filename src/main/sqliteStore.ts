@@ -226,33 +226,8 @@ export class SqliteStore {
       );
     `);
 
-    // Create RAG knowledge base tables
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS rag_documents (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        type TEXT NOT NULL,
-        status TEXT DEFAULT 'processing',
-        nodes_count INTEGER DEFAULT 0,
-        error_message TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-    `);
-
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS rag_trees (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        doc_id TEXT NOT NULL REFERENCES rag_documents(id) ON DELETE CASCADE,
-        tree_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-    `);
-
-    this.db.run(`
-      CREATE INDEX IF NOT EXISTS idx_rag_trees_doc_id ON rag_trees(doc_id);
-    `);
+    // RAG document tables are managed by the Python sidecar's own SQLite database (rag.sqlite).
+    // No RAG tables needed here — all CRUD goes through the sidecar API.
 
     // Migrations - safely add columns if they don't exist
     try {

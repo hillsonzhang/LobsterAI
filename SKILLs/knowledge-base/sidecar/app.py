@@ -39,7 +39,9 @@ _rebuild_lock = asyncio.Lock()
 
 # --- LightRAG setup ---
 
-async def _llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
+async def _llm_func(prompt, system_prompt=None, history_messages=None, **kwargs):
+    if history_messages is None:
+        history_messages = []
     from lightrag.llm.openai import openai_complete_if_cache
     return await openai_complete_if_cache(
         LLM_MODEL, prompt,
@@ -183,12 +185,22 @@ def _guess_file_type(filename: str) -> str:
 
 async def _index_document(doc_id: str, file_path: str, file_type: str):
     try:
+        if rag is None:
+            storage.update_document_status(doc_id, "failed", error_message="LightRAG not initialized")
+            return
         storage.update_document_status(doc_id, "processing")
-        text = _extract_text(file_path, file_type)
+        # Run blocking I/O in thread executor to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, _extract_text, file_path, file_type)
         if not text.strip():
             storage.update_document_status(doc_id, "failed", error_message="No text extracted from document")
             return
-        await rag.ainsert(text)
+        # Acquire rebuild lock to prevent indexing while _rebuild_all is clearing data
+        async with _rebuild_lock:
+            if rag is None:
+                storage.update_document_status(doc_id, "failed", error_message="LightRAG destroyed during rebuild")
+                return
+            await rag.ainsert(text)
         storage.update_document_status(doc_id, "completed")
     except Exception as e:
         storage.update_document_status(doc_id, "failed", error_message=str(e))
@@ -305,7 +317,11 @@ async def upload_document(
     if not os.path.realpath(file_path).startswith(os.path.realpath(uploads_dir)):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
+    # Limit upload size to 100MB
+    MAX_UPLOAD_SIZE = 100 * 1024 * 1024
     content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"File too large: {len(content)} bytes (max {MAX_UPLOAD_SIZE})")
     with open(file_path, "wb") as f:
         f.write(content)
 

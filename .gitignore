@@ -31,6 +31,9 @@ SKILLs/**/.server.log
 SKILLs/**/.server.pid
 SKILLs/**/.venv/
 
+# RAG sidecar database
+*.sqlite
+
 package-lock.json
 
 nul

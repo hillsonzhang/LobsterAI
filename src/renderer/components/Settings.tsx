@@ -191,7 +191,6 @@ const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
 );
 const ABOUT_CONTACT_EMAIL = 'sd-agent@sf-supply.com';
 const ABOUT_USER_MANUAL_URL = '';
-const ABOUT_SERVICE_TERMS_URL = '';
 
 const copyTextFallback = (text: string): boolean => {
   const textarea = document.createElement('textarea');
@@ -457,9 +456,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     void window.electron.shell.openExternal(ABOUT_USER_MANUAL_URL);
   }, []);
 
-  const handleOpenServiceTerms = useCallback(() => {
-    void window.electron.shell.openExternal(ABOUT_SERVICE_TERMS_URL);
-  }, []);
 
   const handleExportLogs = useCallback(async () => {
     if (isExportingLogs) {

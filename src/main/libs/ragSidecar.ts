@@ -12,6 +12,10 @@ let restartCount = 0;
 let depsInstalled = false;
 const MAX_RESTARTS = 3;
 
+// Store latest startup args so auto-restart uses current config, not stale closure values
+let lastDbPath: string = '';
+let lastEnv: Record<string, string> = {};
+
 function getPortFilePath(): string {
   return path.join(app.getPath('userData'), 'rag_sidecar_port');
 }
@@ -116,6 +120,10 @@ async function waitForHealth(port: number, timeoutMs = 30000): Promise<boolean> 
 export async function startSidecar(dbPath: string, env?: Record<string, string>): Promise<void> {
   if (sidecarProcess) return;
 
+  // Store latest args for auto-restart to use current config
+  lastDbPath = dbPath;
+  lastEnv = env || {};
+
   const port = await findFreePort();
   sidecarPort = port;
   sidecarReady = false;
@@ -174,7 +182,8 @@ export async function startSidecar(dbPath: string, env?: Record<string, string>)
     if (code !== 0 && restartCount < MAX_RESTARTS) {
       restartCount++;
       console.log(`[RAG Sidecar] restarting (${restartCount}/${MAX_RESTARTS})...`);
-      startSidecar(dbPath, env).catch(console.error);
+      // Use lastDbPath/lastEnv instead of closure values to pick up config changes
+      startSidecar(lastDbPath, lastEnv).catch(console.error);
     }
   });
 
@@ -203,6 +212,16 @@ export function stopSidecar(): void {
   }
   sidecarReady = false;
   sidecarPort = 0;
+
+  // Clean up port file so stale port is not read by skill scripts
+  try {
+    const portFile = getPortFilePath();
+    if (fs.existsSync(portFile)) {
+      fs.unlinkSync(portFile);
+    }
+  } catch {
+    // ignore cleanup errors
+  }
 }
 
 export async function restartSidecar(dbPath: string, env?: Record<string, string>): Promise<void> {

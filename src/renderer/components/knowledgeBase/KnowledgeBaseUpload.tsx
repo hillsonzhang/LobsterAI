@@ -14,7 +14,7 @@ const KnowledgeBaseUpload: React.FC<KnowledgeBaseUploadProps> = ({ onUpload, dis
     if (disabled) return;
     const result = await window.electron?.dialog?.selectFile({
       title: i18nService.t('knowledgeBaseUpload'),
-      filters: [{ name: 'Documents', extensions: ['pdf', 'md'] }],
+      filters: [{ name: 'Documents', extensions: ['pdf', 'md', 'txt'] }],
     });
     if (result?.success && result.path) {
       onUpload(result.path);
@@ -29,9 +29,9 @@ const KnowledgeBaseUpload: React.FC<KnowledgeBaseUploadProps> = ({ onUpload, dis
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const ext = file.name.split('.').pop()?.toLowerCase();
-      if (ext === 'pdf' || ext === 'md') {
-        // In Electron sandbox, File.path may still be available for drag-and-drop
-        const filePath = (file as any).path;
+      if (ext === 'pdf' || ext === 'md' || ext === 'txt') {
+        // Electron exposes File.path for drag-and-drop even with sandbox enabled
+        const filePath = (file as any).path as string | undefined;
         if (filePath) {
           onUpload(filePath);
         }

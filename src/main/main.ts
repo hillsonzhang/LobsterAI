@@ -1196,28 +1196,43 @@ if (!gotTheLock) {
   });
 
   // --- RAG Knowledge Base IPC handlers ---
-  ipcMain.handle('rag:uploadDocument', async (_event, { filePath, type }) => {
-    return ragService.uploadDocument(filePath, type);
+  ipcMain.handle('rag:uploadDocument', async (_event, args: { filePath: string; type?: string }) => {
+    if (!args?.filePath || typeof args.filePath !== 'string') {
+      throw new Error('filePath is required');
+    }
+    return ragService.uploadDocument(args.filePath, args.type);
   });
 
-  ipcMain.handle('rag:listDocuments', async (_event, { limit, offset } = {}) => {
-    return ragService.listDocuments(limit, offset);
+  ipcMain.handle('rag:listDocuments', async (_event, args?: { limit?: number; offset?: number }) => {
+    return ragService.listDocuments(args?.limit, args?.offset);
   });
 
-  ipcMain.handle('rag:deleteDocument', async (_event, { docId }) => {
-    return ragService.deleteDocument(docId);
+  ipcMain.handle('rag:deleteDocument', async (_event, args: { docId: string }) => {
+    if (!args?.docId || typeof args.docId !== 'string') {
+      throw new Error('docId is required');
+    }
+    return ragService.deleteDocument(args.docId);
   });
 
-  ipcMain.handle('rag:retryIndex', async (_event, { docId }) => {
-    return ragService.retryIndex(docId);
+  ipcMain.handle('rag:retryIndex', async (_event, args: { docId: string }) => {
+    if (!args?.docId || typeof args.docId !== 'string') {
+      throw new Error('docId is required');
+    }
+    return ragService.retryIndex(args.docId);
   });
 
-  ipcMain.handle('rag:getDocumentStatus', async (_event, { docId }) => {
-    return ragService.getDocumentStatus(docId);
+  ipcMain.handle('rag:getDocumentStatus', async (_event, args: { docId: string }) => {
+    if (!args?.docId || typeof args.docId !== 'string') {
+      throw new Error('docId is required');
+    }
+    return ragService.getDocumentStatus(args.docId);
   });
 
-  ipcMain.handle('rag:searchDocuments', async (_event, { query, docIds }) => {
-    return ragService.searchDocuments(query, docIds);
+  ipcMain.handle('rag:searchDocuments', async (_event, args: { query: string; docIds?: string[] }) => {
+    if (!args?.query || typeof args.query !== 'string') {
+      throw new Error('query is required');
+    }
+    return ragService.searchDocuments(args.query, args.docIds);
   });
 
   ipcMain.handle('rag:getSidecarStatus', async () => {
@@ -1226,21 +1241,21 @@ if (!gotTheLock) {
 
   function buildRagEnv(): Record<string, string> {
     const env: Record<string, string> = {};
-    const embed = getStore().get<any>('rag_embedding_config');
+    const embed = getStore().get<{ apiBase: string; apiKey: string; model: string; dim: number }>('rag_embedding_config');
     if (embed) {
       env.EMBED_API_BASE = embed.apiBase || '';
       env.EMBED_API_KEY = embed.apiKey || '';
       env.EMBED_MODEL = embed.model || '';
       env.EMBED_DIM = String(embed.dim || 1536);
     }
-    const llm = getStore().get<any>('rag_llm_config');
+    const llm = getStore().get<{ apiBase: string; apiKey: string; model: string }>('rag_llm_config');
     if (llm) {
       env.LLM_API_BASE = llm.apiBase || '';
       env.LLM_API_KEY = llm.apiKey || '';
       env.LLM_MODEL = llm.model || '';
     }
     env.ENABLE_LLM_CACHE_FOR_EXTRACT = 'true';
-    const reranker = getStore().get<any>('rag_reranker_config');
+    const reranker = getStore().get<{ enabled: boolean; apiBase: string; apiKey: string; model: string }>('rag_reranker_config');
     if (reranker?.enabled) {
       env.RERANK_ENABLED = 'true';
       env.RERANK_API_BASE = reranker.apiBase || '';
@@ -1251,7 +1266,7 @@ if (!gotTheLock) {
   }
 
   ipcMain.handle('rag:getEmbeddingConfig', async () => {
-    return getStore().get<any>('rag_embedding_config') || null;
+    return getStore().get<{ apiBase: string; apiKey: string; model: string; dim: number }>('rag_embedding_config') || null;
   });
 
   ipcMain.handle('rag:setEmbeddingConfig', async (_event, config: { apiBase: string; apiKey: string; model: string; dim: number }) => {
@@ -1279,7 +1294,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('rag:getLlmConfig', async () => {
-    return getStore().get<any>('rag_llm_config') || null;
+    return getStore().get<{ apiBase: string; apiKey: string; model: string }>('rag_llm_config') || null;
   });
 
   ipcMain.handle('rag:setLlmConfig', async (_event, config: { apiBase: string; apiKey: string; model: string }) => {
@@ -1302,7 +1317,7 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('rag:getRerankerConfig', async () => {
-    return getStore().get<any>('rag_reranker_config') || null;
+    return getStore().get<{ enabled: boolean; apiBase: string; apiKey: string; model: string }>('rag_reranker_config') || null;
   });
 
   ipcMain.handle('rag:setRerankerConfig', async (_event, config: { enabled: boolean; apiBase: string; apiKey: string; model: string }) => {

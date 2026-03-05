@@ -29,7 +29,7 @@ const KnowledgeBaseDocList: React.FC<KnowledgeBaseDocListProps> = ({ documents, 
   if (loading) {
     return (
       <div className="text-center py-8 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
-        Loading...
+        {i18nService.t('knowledgeBaseLoading')}
       </div>
     );
   }

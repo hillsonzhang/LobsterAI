@@ -21,7 +21,12 @@ class KnowledgeBaseService {
     try {
       const result = await window.electron?.rag?.listDocuments();
       if (result?.documents) {
-        store.dispatch(setDocuments(result.documents));
+        store.dispatch(setDocuments(result.documents.map(d => ({
+          ...d,
+          type: d.type as RagDocument['type'],
+          status: d.status as RagDocument['status'],
+          error_message: d.error_message ?? undefined,
+        }))));
         // Start polling for any processing documents
         for (const doc of result.documents) {
           if (doc.status === 'processing') {
@@ -93,9 +98,9 @@ class KnowledgeBaseService {
         if (status) {
           store.dispatch(updateDocumentStatus({
             id: docId,
-            status: status.status,
+            status: status.status as RagDocument['status'],
             nodes_count: status.nodes_count,
-            error_message: status.error_message,
+            error_message: status.error_message ?? undefined,
           }));
           if (status.status === 'completed' || status.status === 'failed') {
             this.stopPollingStatus(docId);
