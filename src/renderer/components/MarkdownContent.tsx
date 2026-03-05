@@ -616,4 +616,4 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   );
 };
 
-export default MarkdownContent;
+export default React.memo(MarkdownContent);

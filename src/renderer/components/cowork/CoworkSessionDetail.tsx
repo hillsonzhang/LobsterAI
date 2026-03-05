@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
@@ -591,11 +591,11 @@ const TodoWriteInputView: React.FC<{ items: ParsedTodoItem[] }> = ({ items }) =>
   );
 };
 
-const ToolCallGroup: React.FC<{
+const ToolCallGroup = React.memo<{
   group: ToolGroupItem;
   isLastInSequence?: boolean;
   mapDisplayText?: (value: string) => string;
-}> = ({
+}>(({
   group,
   isLastInSequence = true,
   mapDisplayText,
@@ -730,7 +730,7 @@ const ToolCallGroup: React.FC<{
       )}
     </div>
   );
-};
+});
 
 // Copy button component
 const CopyButton: React.FC<{
@@ -796,7 +796,7 @@ const CopyButton: React.FC<{
   );
 };
 
-const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = ({ message, skills }) => {
+const UserMessageItem = React.memo<{ message: CoworkMessage; skills: Skill[] }>(({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
@@ -808,16 +808,6 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
 
   // Get image attachments from metadata
   const imageAttachments = ((message.metadata as CoworkMessageMetadata)?.imageAttachments ?? []) as CoworkImageAttachment[];
-
-  // Debug: log what we read from metadata for user messages
-  console.log('[UserMessageItem] render', {
-    messageId: message.id,
-    hasMetadata: !!message.metadata,
-    metadataKeys: message.metadata ? Object.keys(message.metadata) : [],
-    imageAttachmentsCount: imageAttachments.length,
-    imageAttachmentsNames: imageAttachments.map(a => a.name),
-    imageAttachmentsBase64Lengths: imageAttachments.map(a => a.base64Data?.length ?? 0),
-  });
 
   return (
     <div
@@ -894,14 +884,14 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
       )}
     </div>
   );
-};
+});
 
-const AssistantMessageItem: React.FC<{
+const AssistantMessageItem = React.memo<{
   message: CoworkMessage;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showCopyButton?: boolean;
-}> = ({
+}>(({
   message,
   resolveLocalFilePath,
   mapDisplayText,
@@ -933,7 +923,7 @@ const AssistantMessageItem: React.FC<{
       )}
     </div>
   );
-};
+});
 
 // Streaming activity bar shown between messages and input
 const StreamingActivityBar: React.FC<{ messages: CoworkMessage[] }> = ({ messages }) => {
@@ -1032,13 +1022,13 @@ const ThinkingBlock: React.FC<{
   );
 };
 
-const AssistantTurnBlock: React.FC<{
+const AssistantTurnBlock = React.memo<{
   turn: ConversationTurn;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
-}> = ({
+}>(({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
@@ -1168,7 +1158,7 @@ const AssistantTurnBlock: React.FC<{
       </div>
     </div>
   );
-};
+});
 
 const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onManageSkills,
@@ -1181,7 +1171,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   updateBadge,
 }) => {
   const isMac = window.electron.platform === 'darwin';
-  const { currentSession, isStreaming } = useSelector((state: RootState) => state.cowork);
+  const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
+  const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1602,12 +1593,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll]);
 
+  const displayItems = useMemo(
+    () => currentSession ? buildDisplayItems(currentSession.messages) : [],
+    [currentSession?.messages]
+  );
+  const turns = useMemo(
+    () => buildConversationTurns(displayItems),
+    [displayItems]
+  );
+
   if (!currentSession) {
     return null;
   }
-
-  const displayItems = buildDisplayItems(currentSession.messages);
-  const turns = buildConversationTurns(displayItems);
 
   const renderConversationTurns = () => {
     if (turns.length === 0) {
