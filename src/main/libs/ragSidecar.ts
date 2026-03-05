@@ -136,6 +136,7 @@ export async function startSidecar(dbPath: string, env?: Record<string, string>)
     RAG_DB_PATH: dbPath,
     RAG_PORT: String(port),
     RAG_WORKING_DIR: path.join(app.getPath('userData'), 'lightrag_data'),
+    PYTHONPATH: sidecarDir,
     ...env,
   };
 

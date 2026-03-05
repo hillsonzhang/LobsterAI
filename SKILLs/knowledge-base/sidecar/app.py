@@ -1,8 +1,17 @@
 import os
+import sys
 import asyncio
 import shutil
 import traceback
 from contextlib import asynccontextmanager
+
+# Ensure the sidecar directory is on sys.path so sibling modules (e.g. storage)
+# can be imported even when running under a portable Python with a ._pth file
+# that disables PYTHONPATH and script-directory auto-insertion.
+_sidecar_dir = os.path.dirname(os.path.abspath(__file__))
+if _sidecar_dir not in sys.path:
+    sys.path.insert(0, _sidecar_dir)
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional

@@ -962,10 +962,6 @@ export class SkillManager {
   }
 
   syncBundledSkillsToUserData(): void {
-    if (!app.isPackaged) {
-      return;
-    }
-
     console.log('[skills] syncBundledSkillsToUserData: start');
     const userRoot = this.ensureSkillsRoot();
     console.log('[skills] syncBundledSkillsToUserData: userRoot =', userRoot);

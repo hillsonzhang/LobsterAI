@@ -2,7 +2,7 @@
 name: knowledge-base
 description: "本地知识库检索，支持快速向量搜索和深度知识图谱分析"
 official: true
-version: 4.0.0
+version: 4.0.1
 metadata:
   clawdbot:
     emoji: "📚"
@@ -11,6 +11,8 @@ metadata:
 ---
 
 # 知识库检索
+
+> **⚠️ 重要：所有命令必须严格使用 bash 语法（如下方示例所示）。运行环境始终是 /usr/bin/bash，即使在 Windows 上也是如此。严禁使用 PowerShell 语法（如 `Get-Content`、`$env:VAR`、`Test-Path`、`Invoke-RestMethod` 等），否则会执行失败。请直接复制下方的 bash 示例命令，仅替换查询参数。**
 
 本地知识库检索技能，基于 LightRAG 实现向量 + 知识图谱混合检索。支持两种搜索模式：快速搜索（默认）和深度搜索。
 
@@ -128,6 +130,7 @@ RAG_PORT=$(cat "$RAG_PORT_FILE" 2>/dev/null || echo $RAG_PORT) && curl -s -X DEL
 
 ## 注意事项
 
+- **所有命令必须使用 bash 语法**，即使在 Windows 环境下也是如此（运行环境始终是 bash shell）。**严禁**使用 PowerShell 语法（如 `Get-Content`、`$env:VAR` 等）
 - 每次执行命令前必须获取最新端口：`RAG_PORT=$(cat "$RAG_PORT_FILE" 2>/dev/null || echo $RAG_PORT)`
 - `RAG_PORT_FILE` 和 `RAG_PORT` 环境变量由系统自动设置
 - **禁止**使用 `${VAR:?...}` 等高级 shell 语法
