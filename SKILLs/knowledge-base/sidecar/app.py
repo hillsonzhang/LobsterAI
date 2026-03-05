@@ -256,15 +256,25 @@ async def test_llm():
 
 @app.post("/index")
 async def index_document(req: IndexRequest):
-    if not os.path.exists(req.path):
+    # Resolve to absolute path and validate it exists
+    resolved = os.path.realpath(req.path)
+    if not os.path.exists(resolved):
         raise HTTPException(status_code=400, detail=f"File not found: {req.path}")
 
-    name = os.path.basename(req.path)
-    doc = storage.create_document(name, req.path, req.type)
-    doc_id = doc["id"]
+    # Security: restrict to WORKING_DIR (uploads) and common user directories
+    allowed_prefixes = [
+        os.path.realpath(WORKING_DIR),
+        os.path.expanduser("~"),
+    ]
+    if not any(resolved.startswith(prefix) for prefix in allowed_prefixes):
+        raise HTTPException(status_code=403, detail="Access denied: file path is outside allowed directories")
 
     if rag is None:
         raise HTTPException(status_code=503, detail="LightRAG not initialized (check LLM + Embedding config)")
+
+    name = os.path.basename(resolved)
+    doc = storage.create_document(name, resolved, req.type)
+    doc_id = doc["id"]
 
     asyncio.create_task(_index_document(doc_id, req.path, req.type))
     return {"doc_id": doc_id, "status": "processing"}
@@ -287,8 +297,13 @@ async def upload_document(
     os.makedirs(uploads_dir, exist_ok=True)
 
     import uuid
-    safe_name = f"{uuid.uuid4().hex[:8]}_{filename}"
+    # Sanitize filename: strip directory separators to prevent path traversal
+    sanitized = os.path.basename(filename).replace("\x00", "")
+    safe_name = f"{uuid.uuid4().hex[:8]}_{sanitized}"
     file_path = os.path.join(uploads_dir, safe_name)
+    # Double-check resolved path is within uploads_dir
+    if not os.path.realpath(file_path).startswith(os.path.realpath(uploads_dir)):
+        raise HTTPException(status_code=400, detail="Invalid filename")
 
     content = await file.read()
     with open(file_path, "wb") as f:
