@@ -632,4 +632,4 @@ declare global {
   }
 }
 
-export {}; 
+export { McpMarketplaceServer }; 

@@ -457,6 +457,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   }, []);
 
 
+  // @ts-expect-error TS6133 — will be wired to UI in a future PR
   const handleExportLogs = useCallback(async () => {
     if (isExportingLogs) {
       return;
