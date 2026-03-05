@@ -1,3 +1,4 @@
+import { startTransition } from 'react';
 import { store } from '../store';
 import {
   setSessions,
@@ -91,7 +92,9 @@ class CoworkService {
 
     // Message update listener (for streaming content updates)
     const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content }) => {
-      store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+      startTransition(() => {
+        store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+      });
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
 
