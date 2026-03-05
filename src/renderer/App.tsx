@@ -241,8 +241,7 @@ const App: React.FC = () => {
       const nextUpdate = await checkForAppUpdate(currentVersion);
       setUpdateInfo(nextUpdate);
       if (nextUpdate) {
-        // Force update: automatically show modal when update is detected
-        setShowUpdateModal(true);
+        setShowUpdateModal(nextUpdate.forceUpdate);
       } else {
         setShowUpdateModal(false);
       }
@@ -669,7 +668,7 @@ const App: React.FC = () => {
           errorMessage={updateError}
           onCancelDownload={handleCancelDownload}
           onRetry={handleRetryUpdate}
-          forceUpdate
+          forceUpdate={updateInfo.forceUpdate}
         />
       )}
       {permissionModal}

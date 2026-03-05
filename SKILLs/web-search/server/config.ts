@@ -61,8 +61,8 @@ export const defaultConfig: Config = {
     host: '127.0.0.1' // Localhost only for security
   },
   search: {
-    defaultEngine: 'auto',
-    fallbackOrder: ['google', 'bing'],
+    defaultEngine: 'bing',
+    fallbackOrder: ['bing', 'google'],
     defaultMaxResults: 10,
     searchTimeout: 30000, // 30 seconds
     navigationTimeout: 15000 // 15 seconds

@@ -185,6 +185,7 @@ const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
 );
 const ABOUT_CONTACT_EMAIL = 'sd-agent@sf-supply.com';
 const ABOUT_USER_MANUAL_URL = '';
+const ABOUT_SERVICE_TERMS_URL = '';
 
 const copyTextFallback = (text: string): boolean => {
   const textarea = document.createElement('textarea');

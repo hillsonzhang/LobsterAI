@@ -18,6 +18,7 @@ type UpdateApiResponse = {
     value?: {
       version?: string;
       date?: string;
+      forceUpdate?: boolean;
       changeLog?: {
         ch?: ChangeLogLang;
         en?: ChangeLogLang;
@@ -43,6 +44,7 @@ export interface AppUpdateInfo {
   date: string;
   changeLog: { zh: ChangeLogEntry; en: ChangeLogEntry };
   url: string;
+  forceUpdate: boolean;
 }
 
 const toVersionParts = (version: string): number[] => (
@@ -127,5 +129,6 @@ export const checkForAppUpdate = async (currentVersion: string): Promise<AppUpda
       en: toEntry(value?.changeLog?.en),
     },
     url: getPlatformDownloadUrl(value),
+    forceUpdate: value?.forceUpdate === true,
   };
 };
