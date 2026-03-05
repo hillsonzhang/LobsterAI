@@ -3,6 +3,7 @@ import { store } from '../store';
 import {
   setSessions,
   setCurrentSession,
+  setCurrentSessionId,
   addSession,
   updateSessionStatus,
   deleteSession as deleteSessionAction,
@@ -317,8 +318,13 @@ class CoworkService {
 
     const result = await cowork.getSession(sessionId);
     if (result.success && result.session) {
-      store.dispatch(setCurrentSession(result.session));
+      // 立即更新 sessionId，让 tab 高亮瞬间切换
+      store.dispatch(setCurrentSessionId(sessionId));
       store.dispatch(setStreaming(result.session.status === 'running'));
+      // 内容渲染（含 KaTeX 公式编译）作为低优先级 transition，不阻塞 UI 交互
+      startTransition(() => {
+        store.dispatch(setCurrentSession(result.session));
+      });
       return result.session;
     }
 
