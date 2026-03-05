@@ -51,11 +51,12 @@ async def _llm_func(prompt, system_prompt=None, history_messages=[], **kwargs):
     )
 
 
-async def _embed_func(texts: list[str]) -> list[list[float]]:
+async def _embed_func(texts: list[str]):
+    import numpy as np
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=EMBED_API_KEY, base_url=EMBED_API_BASE or None)
     resp = await client.embeddings.create(input=texts, model=EMBED_MODEL)
-    return [d.embedding for d in resp.data]
+    return np.array([d.embedding for d in resp.data], dtype=np.float32)
 
 
 def _create_lightrag():
