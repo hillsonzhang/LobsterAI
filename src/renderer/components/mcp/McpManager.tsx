@@ -4,14 +4,13 @@ import {
   MagnifyingGlassIcon,
   TrashIcon,
   PencilIcon,
-  ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline';
 import ConnectorIcon from '../icons/ConnectorIcon';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
 import { setMcpServers } from '../../store/slices/mcpSlice';
 import { RootState } from '../../store';
-import { McpServerConfig, McpServerFormData, McpRegistryEntry } from '../../types/mcp';
+import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo } from '../../types/mcp';
 import { mcpRegistry, mcpCategories } from '../../data/mcpRegistry';
 import ErrorMessage from '../ErrorMessage';
 import Tooltip from '../ui/Tooltip';
@@ -38,6 +37,8 @@ const McpManager: React.FC = () => {
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
   const [installingRegistry, setInstallingRegistry] = useState<McpRegistryEntry | null>(null);
   const [activeCategory, setActiveCategory] = useState('all');
+  const [dynamicRegistry, setDynamicRegistry] = useState<McpRegistryEntry[]>(mcpRegistry);
+  const [dynamicCategories, setDynamicCategories] = useState<ReadonlyArray<{ id: string; key: string; name_zh?: string; name_en?: string }>>(mcpCategories);
 
   useEffect(() => {
     let isActive = true;
@@ -49,6 +50,29 @@ const McpManager: React.FC = () => {
     loadServers();
     return () => { isActive = false; };
   }, [dispatch]);
+
+  useEffect(() => {
+    let isActive = true;
+    const fetchMarketplace = async () => {
+      const result = await mcpService.fetchMarketplace();
+      if (!isActive || !result) return;
+      setDynamicRegistry(result.registry);
+      const cats: Array<{ id: string; key: string; name_zh?: string; name_en?: string }> = [
+        { id: 'all', key: 'mcpCategoryAll' },
+        ...result.categories
+          .filter((c: McpMarketplaceCategoryInfo) => c.id !== 'all')
+          .map((c: McpMarketplaceCategoryInfo) => ({
+            id: c.id,
+            key: '',
+            name_zh: c.name_zh,
+            name_en: c.name_en,
+          })),
+      ];
+      setDynamicCategories(cats);
+    };
+    fetchMarketplace();
+    return () => { isActive = false; };
+  }, []);
 
   const installedRegistryIds = useMemo(() => {
     const ids = new Set<string>();
@@ -79,18 +103,18 @@ const McpManager: React.FC = () => {
 
   const filteredMarketplace = useMemo(() => {
     const query = searchQuery.toLowerCase();
-    let entries = mcpRegistry.filter(e => !installedRegistryIds.has(e.id));
+    let entries = [...dynamicRegistry];
     if (query) {
       entries = entries.filter(e =>
         e.name.toLowerCase().includes(query)
-        || i18nService.t(e.descriptionKey).toLowerCase().includes(query)
+        || ((i18nService.getLanguage() === 'zh' ? e.description_zh : e.description_en) || i18nService.t(e.descriptionKey)).toLowerCase().includes(query)
       );
     }
     if (activeCategory !== 'all') {
       entries = entries.filter(e => e.category === activeCategory);
     }
     return entries;
-  }, [installedRegistryIds, searchQuery, activeCategory]);
+  }, [searchQuery, activeCategory, dynamicRegistry]);
 
   const handleToggleEnabled = async (serverId: string) => {
     const targetServer = servers.find(s => s.id === serverId);
@@ -191,15 +215,11 @@ const McpManager: React.FC = () => {
     return server.url || '';
   };
 
-  const handleOpenGithub = (url: string) => {
-    window.electron.shell.openExternal(url);
-  };
-
   const existingNames = useMemo(() => servers.map(s => s.name), [servers]);
 
   const marketplaceCount = useMemo(
-    () => mcpRegistry.filter(e => !installedRegistryIds.has(e.id)).length,
-    [installedRegistryIds]
+    () => dynamicRegistry.length,
+    [dynamicRegistry]
   );
 
   const customCount = useMemo(
@@ -302,16 +322,6 @@ const McpManager: React.FC = () => {
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {server.githubUrl && (
-                      <button
-                        type="button"
-                        onClick={() => handleOpenGithub(server.githubUrl!)}
-                        className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                        title={i18nService.t('mcpViewOnGithub')}
-                      >
-                        <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => handleOpenEditForm(server)}
@@ -382,7 +392,7 @@ const McpManager: React.FC = () => {
         <div>
           {/* Category filter pills */}
           <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-            {mcpCategories.map((cat) => (
+            {dynamicCategories.map((cat) => (
               <button
                 key={cat.id}
                 type="button"
@@ -393,7 +403,7 @@ const McpManager: React.FC = () => {
                     : 'dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover border dark:border-claude-darkBorder border-claude-border'
                 }`}
               >
-                {i18nService.t(cat.key)}
+                {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
               </button>
             ))}
           </div>
@@ -419,26 +429,24 @@ const McpManager: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenGithub(entry.githubUrl)}
-                        className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                        title={i18nService.t('mcpViewOnGithub')}
-                      >
-                        <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleInstallFromRegistry(entry)}
-                        className="px-2.5 py-1 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
-                      >
-                        {i18nService.t('mcpInstall')}
-                      </button>
+                      {installedRegistryIds.has(entry.id) ? (
+                        <span className="px-2.5 py-1 text-xs rounded-lg bg-claude-surface dark:bg-claude-darkSurface text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                          {i18nService.t('mcpInstalled')}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleInstallFromRegistry(entry)}
+                          className="px-2.5 py-1 text-xs rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                        >
+                          {i18nService.t('mcpInstall')}
+                        </button>
+                      )}
                     </div>
                   </div>
 
                   <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                    {i18nService.t(entry.descriptionKey)}
+                    {(i18nService.getLanguage() === 'zh' ? entry.description_zh : entry.description_en) || i18nService.t(entry.descriptionKey)}
                   </p>
 
                   <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -491,16 +499,6 @@ const McpManager: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {server.githubUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleOpenGithub(server.githubUrl!)}
-                          className="p-1 rounded-lg text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent dark:hover:text-claude-accent transition-colors"
-                          title={i18nService.t('mcpViewOnGithub')}
-                        >
-                          <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                        </button>
-                      )}
                       <button
                         type="button"
                         onClick={() => handleOpenEditForm(server)}

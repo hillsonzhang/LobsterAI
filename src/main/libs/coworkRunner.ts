@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { type ChildProcessByStdio } from 'child_process';
+import { type ChildProcessByStdio, spawnSync } from 'child_process';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -99,7 +99,6 @@ const SKILLS_MARKER = '/skills/';
 const TASK_WORKSPACE_CONTAINER_DIR = '.lobsterai-tasks';
 const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000;
 const DELETE_TOOL_NAMES = new Set(['delete', 'remove', 'unlink', 'rmdir']);
-const BLOCKED_BUILTIN_WEB_TOOLS = new Set(['websearch', 'webfetch']);
 const SAFETY_APPROVAL_ALLOW_OPTION = '允许本次操作';
 const SAFETY_APPROVAL_DENY_OPTION = '拒绝本次操作';
 const DELETE_COMMAND_RE = /\b(rm|rmdir|unlink|del|erase|remove-item)\b/i;
@@ -1973,48 +1972,6 @@ export class CoworkRunner extends EventEmitter {
       || GIT_CLEAN_COMMAND_RE.test(command);
   }
 
-  private isBlockedBuiltinWebTool(toolName: string): boolean {
-    const normalized = String(toolName ?? '').trim().toLowerCase();
-    if (!normalized) {
-      return false;
-    }
-
-    const compact = normalized.replace(/[^a-z0-9]/g, '');
-    if (BLOCKED_BUILTIN_WEB_TOOLS.has(compact)) {
-      return true;
-    }
-
-    const segments = normalized.split(/[^a-z0-9]+/).filter(Boolean);
-    if (segments.length >= 2) {
-      const tail = `${segments[segments.length - 2]}${segments[segments.length - 1]}`;
-      if (BLOCKED_BUILTIN_WEB_TOOLS.has(tail)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private denyBlockedBuiltinWebTool(
-    sessionId: string,
-    executionMode: 'local' | 'sandbox',
-    toolName: string
-  ): PermissionResult | null {
-    if (!this.isBlockedBuiltinWebTool(toolName)) {
-      return null;
-    }
-
-    coworkLog('WARN', 'toolPolicy', 'Blocked disabled built-in web tool', {
-      sessionId,
-      executionMode,
-      toolName,
-    });
-    return {
-      behavior: 'deny',
-      message: 'Tool blocked by app policy: WebSearch/WebFetch are disabled in this environment.',
-    };
-  }
-
   private truncateCommandPreview(command: string, maxLength = 120): string {
     const compact = command.replace(/\s+/g, ' ').trim();
     if (compact.length <= maxLength) return compact;
@@ -2573,6 +2530,22 @@ export class CoworkRunner extends EventEmitter {
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
     let stderrTail = '';
 
+    // Log MCP-relevant environment for debugging
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: isPackaged=${app.isPackaged}, platform=${process.platform}, arch=${process.arch}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_ELECTRON_PATH=${envVars.LOBSTERAI_ELECTRON_PATH || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: ELECTRON_RUN_AS_NODE=${envVars.ELECTRON_RUN_AS_NODE || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: NODE_PATH=${envVars.NODE_PATH || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: HOME=${envVars.HOME || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: TMPDIR=${envVars.TMPDIR || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: LOBSTERAI_NPM_BIN_DIR=${envVars.LOBSTERAI_NPM_BIN_DIR || '(not set)'}`);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: claudeCodePath=${claudeCodePath}`);
+    // Log full PATH split by delimiter
+    const pathEntries = (envVars.PATH || '').split(path.delimiter);
+    coworkLog('INFO', 'runClaudeCodeLocal', `MCP env: PATH has ${pathEntries.length} entries:`);
+    for (let i = 0; i < pathEntries.length; i++) {
+      coworkLog('INFO', 'runClaudeCodeLocal', `  PATH[${i}]: ${pathEntries[i]}`);
+    }
+
     // When packaged, process.execPath is the Electron binary.
     // child_process.fork() uses process.execPath by default, so without
     // ELECTRON_RUN_AS_NODE the SDK would launch another Electron app instance
@@ -2613,6 +2586,7 @@ export class CoworkRunner extends EventEmitter {
       pathToClaudeCodeExecutable: claudeCodePath,
       permissionMode: 'default',
       includePartialMessages: true,
+      disallowedTools: ['WebSearch', 'WebFetch'],
       stderr: (message: string) => {
         stderrTail += message;
         if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
@@ -2648,11 +2622,6 @@ export class CoworkRunner extends EventEmitter {
           toolInput && typeof toolInput === 'object'
             ? (toolInput as Record<string, unknown>)
             : { value: toolInput };
-
-        const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'local', resolvedName);
-        if (blockedToolResult) {
-          return blockedToolResult;
-        }
 
         if (resolvedName === 'Bash') {
           const command = this.extractToolCommand(resolvedInput);
@@ -2865,6 +2834,7 @@ export class CoworkRunner extends EventEmitter {
       if (this.mcpServerProvider) {
         try {
           const enabledMcpServers = this.mcpServerProvider();
+          coworkLog('INFO', 'runClaudeCodeLocal', `MCP: ${enabledMcpServers.length} user-configured servers found`);
           for (const server of enabledMcpServers) {
             const serverKey = server.name;
             // Skip if name conflicts with existing MCP servers (e.g., memory server)
@@ -2881,6 +2851,28 @@ export class CoworkRunner extends EventEmitter {
                   args: server.args || [],
                   env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
                 };
+                coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": stdio command="${server.command}", args=${JSON.stringify(server.args || [])}`);
+                if (server.env && Object.keys(server.env).length > 0) {
+                  coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": custom env vars: ${JSON.stringify(server.env)}`);
+                }
+                // Resolve command path to verify it's findable
+                if (server.command) {
+                  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+                  try {
+                    const resolveResult = spawnSync(whichCmd, [server.command], {
+                      env: { ...envVars, ...(server.env || {}) } as NodeJS.ProcessEnv,
+                      encoding: 'utf-8',
+                      timeout: 5000,
+                    });
+                    if (resolveResult.status === 0 && resolveResult.stdout) {
+                      coworkLog('INFO', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${server.command}" resolves to: ${resolveResult.stdout.trim()}`);
+                    } else {
+                      coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": command "${server.command}" NOT FOUND in PATH (exit: ${resolveResult.status}, stderr: ${(resolveResult.stderr || '').trim()})`);
+                    }
+                  } catch (e) {
+                    coworkLog('WARN', 'runClaudeCodeLocal', `MCP "${serverKey}": failed to resolve command "${server.command}": ${e instanceof Error ? e.message : String(e)}`);
+                  }
+                }
                 break;
               case 'sse':
                 serverConfig = {
@@ -2908,6 +2900,36 @@ export class CoworkRunner extends EventEmitter {
           }
         } catch (error) {
           coworkLog('WARN', 'runClaudeCodeLocal', `Failed to load user MCP servers: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Log final MCP server config summary
+      if (options.mcpServers) {
+        const mcpKeys = Object.keys(options.mcpServers as Record<string, unknown>);
+        coworkLog('INFO', 'runClaudeCodeLocal', `MCP final config: ${mcpKeys.length} servers: [${mcpKeys.join(', ')}]`);
+        for (const key of mcpKeys) {
+          const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
+          if (cfg && typeof cfg === 'object' && 'type' in cfg) {
+            coworkLog('INFO', 'runClaudeCodeLocal', `MCP server "${key}": type=${cfg.type}, command=${cfg.command || 'N/A'}, args=${JSON.stringify(cfg.args || [])}`);
+          }
+        }
+        // Dump full MCP config as JSON for complete debugging
+        try {
+          const serializable: Record<string, unknown> = {};
+          for (const key of mcpKeys) {
+            const cfg = (options.mcpServers as Record<string, Record<string, unknown>>)[key];
+            if (cfg && typeof cfg === 'object') {
+              // Only serialize plain config objects; skip SDK server instances
+              if ('type' in cfg && typeof cfg.type === 'string') {
+                serializable[key] = cfg;
+              } else {
+                serializable[key] = { type: '(SDK server instance)' };
+              }
+            }
+          }
+          coworkLog('INFO', 'runClaudeCodeLocal', `MCP full config dump: ${JSON.stringify(serializable, null, 2)}`);
+        } catch (e) {
+          coworkLog('WARN', 'runClaudeCodeLocal', `MCP config dump failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
 
@@ -3407,11 +3429,6 @@ export class CoworkRunner extends EventEmitter {
               ? (toolInputRaw as Record<string, unknown>)
               : {};
 
-          const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'sandbox', toolName);
-          if (blockedToolResult) {
-            this.writeSandboxPermissionResponse(activeSession, paths.responsesDir, requestId, blockedToolResult);
-            return;
-          }
 
           const responsePath = path.join(paths.responsesDir, `${requestId}.json`);
           this.sandboxPermissions.set(requestId, { sessionId, responsePath });
@@ -3905,11 +3922,6 @@ export class CoworkRunner extends EventEmitter {
             ? (toolInputRaw as Record<string, unknown>)
             : {};
 
-        const blockedToolResult = this.denyBlockedBuiltinWebTool(sessionId, 'sandbox', toolName);
-        if (blockedToolResult) {
-          this.writeSandboxPermissionResponse(activeSession, paths.responsesDir, reqId, blockedToolResult);
-          return;
-        }
 
         const responsePath = path.join(paths.responsesDir, `${reqId}.json`);
         this.sandboxPermissions.set(reqId, { sessionId, responsePath });
