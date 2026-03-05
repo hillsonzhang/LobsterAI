@@ -8,7 +8,7 @@ import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
-import { getSidecarStatus } from './ragSidecar';
+import { getSidecarStatus, getPortFile } from './ragSidecar';
 
 function appendEnvPath(current: string | undefined, additions: string[]): string | undefined {
   const items = new Set<string>();
@@ -980,8 +980,10 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
   env.LOBSTERAI_ELECTRON_PATH = process.execPath.replace(/\\/g, '/');
 
-  // Inject RAG sidecar port for knowledge base skill
+  // Inject RAG sidecar port file path for knowledge base skill
+  // The skill reads port from file at runtime to get the latest port after sidecar restarts
   try {
+    env.RAG_PORT_FILE = getPortFile();
     const ragStatus = getSidecarStatus();
     if (ragStatus.running) {
       env.RAG_PORT = String(ragStatus.port);

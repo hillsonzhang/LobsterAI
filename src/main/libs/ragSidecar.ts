@@ -12,6 +12,14 @@ let restartCount = 0;
 let depsInstalled = false;
 const MAX_RESTARTS = 3;
 
+function getPortFilePath(): string {
+  return path.join(app.getPath('userData'), 'rag_sidecar_port');
+}
+
+export function getPortFile(): string {
+  return getPortFilePath();
+}
+
 function getSkillsRoot(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'SKILLs')
@@ -175,6 +183,13 @@ export async function startSidecar(dbPath: string, env?: Record<string, string>)
     sidecarReady = true;
     restartCount = 0;
     console.log(`[RAG Sidecar] ready on port ${port}`);
+    // Write port to file so skills can read the latest port at runtime
+    try {
+      const portFile = getPortFilePath();
+      fs.writeFileSync(portFile, String(port), 'utf-8');
+    } catch (e) {
+      console.error('[RAG Sidecar] failed to write port file:', e);
+    }
   } else {
     console.error(`[RAG Sidecar] failed to start. stderr: ${stderr}`);
     stopSidecar();
