@@ -189,7 +189,7 @@ const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
 );
-const ABOUT_CONTACT_EMAIL = 'sd-agent@sf-supply.com';
+const ABOUT_CONTACT_EMAIL = 'hillson.zhang@sf-dsc.com';
 const ABOUT_USER_MANUAL_URL = '';
 
 const copyTextFallback = (text: string): boolean => {
