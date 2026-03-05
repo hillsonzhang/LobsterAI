@@ -59,17 +59,17 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
     running: 'text-blue-500',
   };
 
-  const sectionClass = 'rounded-lg border dark:border-claude-darkBorder border-claude-border p-4';
-  const sectionTitleClass = 'text-sm font-semibold dark:text-claude-darkText text-claude-text mb-3';
-  const labelClass = 'text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary';
-  const valueClass = 'text-sm dark:text-claude-darkText text-claude-text';
+  const sectionClass = 'rounded-lg border border-claude-border p-4';
+  const sectionTitleClass = 'text-sm font-semibold text-claude-text mb-3';
+  const labelClass = 'text-xs text-claude-textSecondary';
+  const valueClass = 'text-sm text-claude-text';
 
   return (
     <div className="p-4 space-y-4 max-w-2xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+          <h2 className="text-lg font-semibold text-claude-text">
             {task.name}
           </h2>
         </div>
@@ -77,7 +77,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
           <button
             type="button"
             onClick={handleEdit}
-            className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="p-2 rounded-lg text-claude-textSecondary hover:bg-claude-surfaceHover transition-colors"
             title={i18nService.t('scheduledTasksEdit')}
           >
             <PencilIcon className="w-4 h-4" />
@@ -86,7 +86,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
             type="button"
             onClick={handleRunNow}
             disabled={!!task.state.runningAtMs}
-            className="p-2 rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors disabled:opacity-50"
+            className="p-2 rounded-lg text-claude-textSecondary hover:bg-claude-surfaceHover transition-colors disabled:opacity-50"
             title={i18nService.t('scheduledTasksRun')}
           >
             <PlayIcon className="w-4 h-4" />
@@ -105,7 +105,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
       {/* Prompt */}
       <div className={sectionClass}>
         <h3 className={sectionTitleClass}>{i18nService.t('scheduledTasksPrompt')}</h3>
-        <div className="text-sm dark:text-claude-darkText text-claude-text whitespace-pre-wrap bg-claude-surfaceHover/30 dark:bg-claude-darkSurfaceHover/30 rounded-md p-3">
+        <div className="text-sm text-claude-text whitespace-pre-wrap bg-claude-surfaceHover/30 rounded-md p-3">
           {task.prompt}
         </div>
       </div>
@@ -121,7 +121,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
           <div>
             <div className={labelClass}>{i18nService.t('scheduledTasksFormEnabled')}</div>
             <div className={valueClass}>
-              <span className={`inline-flex items-center gap-1 ${task.enabled ? 'text-green-500' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'}`}>
+              <span className={`inline-flex items-center gap-1 ${task.enabled ? 'text-green-500' : 'text-claude-textSecondary'}`}>
                 {task.enabled ? '✓ ' + i18nService.t('enabled') : i18nService.t('disabled')}
               </span>
             </div>
@@ -171,7 +171,7 @@ const TaskDetail: React.FC<TaskDetailProps> = ({ task, onRequestDelete }) => {
               )}
               {!task.state.lastStatus && '-'}
               {task.state.lastRunAtMs && (
-                <span className="ml-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span className="ml-1 text-xs text-claude-textSecondary">
                   ({new Date(task.state.lastRunAtMs).toLocaleString()})
                 </span>
               )}

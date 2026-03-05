@@ -103,19 +103,19 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
   return (
     <div
       ref={popoverRef}
-      className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface shadow-xl z-50"
+      className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-claude-border bg-claude-surface shadow-xl z-50"
     >
       {/* Search input */}
-      <div className="p-3 border-b dark:border-claude-darkBorder border-claude-border">
+      <div className="p-3 border-b border-claude-border">
         <div className="relative">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-claude-textSecondary" />
           <input
             ref={searchInputRef}
             type="text"
             placeholder={i18nService.t('searchSkills')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text dark:placeholder-claude-darkTextSecondary placeholder-claude-textSecondary border dark:border-claude-darkBorder border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent"
+            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg bg-claude-surface text-claude-text placeholder-claude-textSecondary border border-claude-border focus:outline-none focus:ring-2 focus:ring-claude-accent"
           />
         </div>
       </div>
@@ -123,7 +123,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
       {/* Skills list */}
       <div className="overflow-y-auto py-1" style={{ maxHeight: `${maxListHeight}px` }}>
         {filteredSkills.length === 0 ? (
-          <div className="px-4 py-6 text-center text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+          <div className="px-4 py-6 text-center text-sm text-claude-textSecondary">
             {i18nService.t('noSkillsAvailable')}
           </div>
         ) : (
@@ -135,19 +135,19 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
                 onClick={() => handleSelectSkill(skill)}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${
                   isActive
-                    ? 'dark:bg-claude-accent/10 bg-claude-accent/10'
-                    : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'
+                    ? 'bg-claude-accent/10'
+                    : 'hover:bg-claude-surfaceHover'
                 }`}
               >
                 <div className={`mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
                   isActive
                     ? 'bg-claude-accent text-white'
-                    : 'dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover'
+                    : 'bg-claude-surfaceHover'
                 }`}>
                   {isActive ? (
                     <CheckIcon className="h-4 w-4" />
                   ) : (
-                    <PuzzlePieceIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+                    <PuzzlePieceIcon className="h-4 w-4 text-claude-textSecondary" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -155,7 +155,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
                     <span className={`text-sm font-medium truncate ${
                       isActive
                         ? 'text-claude-accent'
-                        : 'dark:text-claude-darkText text-claude-text'
+                        : 'text-claude-text'
                     }`}>
                       {skill.name}
                     </span>
@@ -165,7 +165,7 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
                       </span>
                     )}
                   </div>
-                  <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary truncate mt-0.5">
+                  <p className="text-xs text-claude-textSecondary truncate mt-0.5">
                     {skillService.getLocalizedSkillDescription(skill.name, skill.description)}
                   </p>
                 </div>
@@ -176,13 +176,13 @@ const SkillsPopover: React.FC<SkillsPopoverProps> = ({
       </div>
 
       {/* Footer - Manage Skills */}
-      <div className="border-t dark:border-claude-darkBorder border-claude-border">
+      <div className="border-t border-claude-border">
         <button
           onClick={handleManageSkills}
-          className="w-full flex items-center justify-between px-4 py-3 text-sm dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors rounded-b-xl"
+          className="w-full flex items-center justify-between px-4 py-3 text-sm text-claude-text hover:bg-claude-surfaceHover transition-colors rounded-b-xl"
         >
           <span>{i18nService.t('manageSkills')}</span>
-          <Cog6ToothIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <Cog6ToothIcon className="h-4 w-4 text-claude-textSecondary" />
         </button>
       </div>
     </div>

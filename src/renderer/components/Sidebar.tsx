@@ -76,7 +76,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`shrink-0 dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted flex flex-col sidebar-transition overflow-hidden ${
+      className={`shrink-0 bg-claude-surfaceMuted flex flex-col sidebar-transition overflow-hidden ${
         isCollapsed ? 'w-0' : 'w-60'
       }`}
     >
@@ -88,7 +88,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="non-draggable h-8 w-8 inline-flex items-center justify-center rounded-lg text-claude-textSecondary hover:bg-claude-surfaceHover transition-colors"
             aria-label={isCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
           >
             <SidebarToggleIcon className="h-4 w-4" isCollapsed={isCollapsed} />
@@ -109,7 +109,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               onShowCowork();
               setIsSearchOpen(true);
             }}
-            className="w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+            className="w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-claude-textSecondary hover:text-claude-text hover:bg-claude-surfaceHover transition-colors"
           >
             <MagnifyingGlassIcon className="h-4 w-4" />
             {i18nService.t('search')}
@@ -122,8 +122,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             }}
             className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
               activeView === 'scheduledTasks'
-                ? 'dark:text-claude-darkText text-claude-text dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                ? 'text-claude-text bg-claude-surfaceHover'
+                : 'text-claude-textSecondary hover:text-claude-text hover:bg-claude-surfaceHover'
             }`}
           >
             <ClockIcon className="h-4 w-4" />
@@ -137,8 +137,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             }}
             className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
               activeView === 'skills'
-                ? 'dark:text-claude-darkText text-claude-text dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                ? 'text-claude-text bg-claude-surfaceHover'
+                : 'text-claude-textSecondary hover:text-claude-text hover:bg-claude-surfaceHover'
             }`}
           >
             <PuzzlePieceIcon className="h-4 w-4" />
@@ -152,8 +152,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             }}
             className={`w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
               activeView === 'mcp'
-                ? 'dark:text-claude-darkText text-claude-text dark:bg-claude-darkSurfaceHover bg-claude-surfaceHover'
-                : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                ? 'text-claude-text bg-claude-surfaceHover'
+                : 'text-claude-textSecondary hover:text-claude-text hover:bg-claude-surfaceHover'
             }`}
           >
             <ConnectorIcon className="h-4 w-4" />
@@ -162,7 +162,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto px-2.5 pb-4">
-        <div className="px-3 pb-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        <div className="px-3 pb-2 text-sm font-medium text-claude-textSecondary">
           {i18nService.t('coworkHistory')}
         </div>
         <CoworkSessionList
@@ -188,7 +188,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         <button
           type="button"
           onClick={() => onShowSettings()}
-          className="w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-text dark:hover:text-claude-darkText hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+          className="w-full inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-claude-textSecondary hover:text-claude-text hover:bg-claude-surfaceHover transition-colors"
           aria-label={i18nService.t('settings')}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M14 17H5" /><path d="M19 7h-9" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" /></svg>

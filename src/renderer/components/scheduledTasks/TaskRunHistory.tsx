@@ -28,7 +28,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
 
   if (runs.length === 0) {
     return (
-      <div className="text-center py-6 text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+      <div className="text-center py-6 text-sm text-claude-textSecondary">
         {i18nService.t('scheduledTasksNoRuns')}
       </div>
     );
@@ -36,7 +36,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
 
   return (
     <div>
-      <div className="divide-y dark:divide-claude-darkBorder/50 divide-claude-border/50">
+      <div className="divide-y divide-claude-border/50">
         {runs.map((run) => {
           const statusInfo = statusIcons[run.status] || { icon: '?', color: '' };
           return (
@@ -44,10 +44,10 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
               <div className="flex items-center gap-3 min-w-0">
                 <span className={`text-sm font-bold ${statusInfo.color}`}>{statusInfo.icon}</span>
                 <div className="min-w-0">
-                  <span className="text-sm dark:text-claude-darkText text-claude-text">
+                  <span className="text-sm text-claude-text">
                     {new Date(run.startedAt).toLocaleString()}
                   </span>
-                  <span className="ml-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <span className="ml-2 text-xs text-claude-textSecondary">
                     {run.trigger === 'manual'
                       ? i18nService.t('scheduledTasksManual')
                       : i18nService.t('scheduledTasksScheduled')}
@@ -56,7 +56,7 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ taskId, runs }) => {
               </div>
               <div className="flex items-center gap-3 shrink-0 ml-2">
                 {run.durationMs !== null && (
-                  <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <span className="text-xs text-claude-textSecondary">
                     {formatDuration(run.durationMs)}
                   </span>
                 )}

@@ -8,41 +8,28 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Cold modern color palette
+        // Theme colors via CSS variables (defined in index.css)
+        // Uses rgb() with <alpha-value> to support Tailwind opacity modifiers (e.g. bg-claude-surface/50)
         claude: {
-          // Light mode colors
-          bg: '#F8F9FB',              // Cool gray-white background
-          surface: '#FFFFFF',          // Cards, inputs
-          surfaceHover: '#F0F1F4',     // Hover state
-          surfaceMuted: '#F3F4F6',     // Subtle area distinction
-          surfaceInset: '#EBEDF0',     // Inset areas (e.g., input inner)
-          border: '#E0E2E7',           // Default border
-          borderLight: '#EBEDF0',      // Subtle dividers
-          text: '#1A1D23',             // Primary text, near-black
-          textSecondary: '#6B7280',    // Secondary text
-          // Dark mode colors
-          darkBg: '#0F1117',           // Dark background, near-black
-          darkSurface: '#1A1D27',      // Dark cards
-          darkSurfaceHover: '#242830', // Dark hover
-          darkSurfaceMuted: '#151820', // Subtle dark area
-          darkSurfaceInset: '#0C0E14', // Dark inset areas
-          darkBorder: '#2A2E38',       // Dark borders
-          darkBorderLight: '#1F232B',  // Subtle dark dividers
-          darkText: '#E4E5E9',         // Dark primary text
-          darkTextSecondary: '#8B8FA3', // Dark secondary text
-          // Accent (tech blue)
-          accent: '#3B82F6',           // Blue primary
-          accentHover: '#2563EB',      // Blue hover
-          accentLight: '#60A5FA',      // Light blue for badges
-          accentMuted: 'rgba(59,130,246,0.10)', // Very faint blue background
+          bg: 'rgb(var(--color-bg) / <alpha-value>)',
+          surface: 'rgb(var(--color-surface) / <alpha-value>)',
+          surfaceHover: 'rgb(var(--color-surface-hover) / <alpha-value>)',
+          surfaceMuted: 'rgb(var(--color-surface-muted) / <alpha-value>)',
+          surfaceInset: 'rgb(var(--color-surface-inset) / <alpha-value>)',
+          border: 'rgb(var(--color-border) / <alpha-value>)',
+          borderLight: 'rgb(var(--color-border-light) / <alpha-value>)',
+          text: 'rgb(var(--color-text) / <alpha-value>)',
+          textSecondary: 'rgb(var(--color-text-secondary) / <alpha-value>)',
+          accent: 'rgb(var(--color-accent) / <alpha-value>)',
+          accentHover: 'rgb(var(--color-accent-hover) / <alpha-value>)',
+          accentLight: 'rgb(var(--color-accent-light) / <alpha-value>)',
+          accentMuted: 'rgb(var(--color-accent-muted) / 0.10)',
         },
         primary: {
-          DEFAULT: '#3B82F6',
-          dark: '#2563EB'
+          DEFAULT: 'rgb(var(--color-primary) / <alpha-value>)',
         },
         secondary: {
-          DEFAULT: '#6B7280',
-          dark: '#2A2E38'
+          DEFAULT: 'rgb(var(--color-secondary) / <alpha-value>)',
         }
       },
       boxShadow: {
@@ -88,16 +75,16 @@ export default {
       typography: {
         DEFAULT: {
           css: {
-            color: '#1A1D23',
+            color: 'rgb(var(--color-text))',
             a: {
-              color: '#3B82F6',
+              color: 'rgb(var(--color-accent))',
               '&:hover': {
-                color: '#2563EB',
+                color: 'rgb(var(--color-accent-hover))',
               },
             },
             code: {
-              color: '#1A1D23',
-              backgroundColor: 'rgba(224, 226, 231, 0.5)',
+              color: 'rgb(var(--color-text))',
+              backgroundColor: 'rgb(var(--color-surface-hover))',
               padding: '0.2em 0.4em',
               borderRadius: '0.25rem',
               fontWeight: '400',
@@ -109,74 +96,30 @@ export default {
               content: '""',
             },
             pre: {
-              backgroundColor: '#F0F1F4',
-              color: '#1A1D23',
+              backgroundColor: 'rgb(var(--color-surface-hover))',
+              color: 'rgb(var(--color-text))',
               padding: '1em',
               borderRadius: '0.75rem',
               overflowX: 'auto',
             },
             blockquote: {
-              borderLeftColor: '#3B82F6',
-              color: '#6B7280',
+              borderLeftColor: 'rgb(var(--color-accent))',
+              color: 'rgb(var(--color-text-secondary))',
             },
             h1: {
-              color: '#1A1D23',
+              color: 'rgb(var(--color-text))',
             },
             h2: {
-              color: '#1A1D23',
+              color: 'rgb(var(--color-text))',
             },
             h3: {
-              color: '#1A1D23',
+              color: 'rgb(var(--color-text))',
             },
             h4: {
-              color: '#1A1D23',
+              color: 'rgb(var(--color-text))',
             },
             strong: {
-              color: '#1A1D23',
-            },
-          },
-        },
-        dark: {
-          css: {
-            color: '#E4E5E9',
-            a: {
-              color: '#60A5FA',
-              '&:hover': {
-                color: '#93BBFD',
-              },
-            },
-            code: {
-              color: '#E4E5E9',
-              backgroundColor: 'rgba(42, 46, 56, 0.5)',
-              padding: '0.2em 0.4em',
-              borderRadius: '0.25rem',
-              fontWeight: '400',
-            },
-            pre: {
-              backgroundColor: '#1A1D27',
-              color: '#E4E5E9',
-              padding: '1em',
-              borderRadius: '0.75rem',
-              overflowX: 'auto',
-            },
-            blockquote: {
-              borderLeftColor: '#3B82F6',
-              color: '#8B8FA3',
-            },
-            h1: {
-              color: '#E4E5E9',
-            },
-            h2: {
-              color: '#E4E5E9',
-            },
-            h3: {
-              color: '#E4E5E9',
-            },
-            h4: {
-              color: '#E4E5E9',
-            },
-            strong: {
-              color: '#E4E5E9',
+              color: 'rgb(var(--color-text))',
             },
           },
         },

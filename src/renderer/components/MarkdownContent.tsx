@@ -232,7 +232,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
                 <ClipboardDocumentIcon className="h-4 w-4" />
               )}
             </button>
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+            <code className="block px-4 py-3 font-mono text-claude-text whitespace-pre">
               {trimmedCodeText}
             </code>
           </div>
@@ -242,13 +242,13 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
 
     // Code block with language - show header with language name
     return (
-      <div className="my-3 rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border relative shadow-subtle">
-        <div className="dark:bg-claude-darkSurfaceMuted bg-claude-surfaceMuted px-4 py-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary font-medium flex items-center justify-between">
+      <div className="my-3 rounded-xl overflow-hidden border border-claude-border relative shadow-subtle">
+        <div className="bg-claude-surfaceMuted px-4 py-2 text-xs text-claude-textSecondary font-medium flex items-center justify-between">
           <span>{match[1]}</span>
           <button
             type="button"
             onClick={handleCopy}
-            className="p-1.5 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            className="p-1.5 rounded-md hover:bg-claude-surfaceHover transition-colors"
             title={i18nService.t('copyToClipboard')}
             aria-label={i18nService.t('copyToClipboard')}
           >
@@ -270,7 +270,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
           </SyntaxHighlighter>
         ) : (
           <div className="m-0 overflow-x-auto bg-[#282c34] text-[13px] leading-6">
-            <code className="block px-4 py-3 font-mono text-claude-darkText whitespace-pre">
+            <code className="block px-4 py-3 font-mono text-claude-text whitespace-pre">
               {trimmedCodeText}
             </code>
           </div>
@@ -280,7 +280,7 @@ const CodeBlock: React.FC<any> = ({ node, className, children, ...props }) => {
   }
 
   const inlineClassName = [
-    'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium dark:text-claude-darkText text-claude-text',
+    'inline bg-transparent px-0.5 text-[0.92em] font-mono font-medium text-claude-text',
     normalizedClassName,
   ].filter(Boolean).join(' ');
 
@@ -400,80 +400,80 @@ const createMarkdownComponents = (
   resolveLocalFilePath?: (href: string, text: string) => string | null
 ) => ({
   p: ({ node, className, children, ...props }: any) => (
-    <p className="my-1 first:mt-0 last:mb-0 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
+    <p className="my-1 first:mt-0 last:mb-0 leading-6 text-claude-text" {...props}>
       {children}
     </p>
   ),
   strong: ({ node, className, children, ...props }: any) => (
-    <strong className="font-semibold dark:text-claude-darkText text-claude-text" {...props}>
+    <strong className="font-semibold text-claude-text" {...props}>
       {children}
     </strong>
   ),
   h1: ({ node, className, children, ...props }: any) => (
-    <h1 className="text-2xl font-semibold mt-6 mb-3 dark:text-claude-darkText text-claude-text" {...props}>
+    <h1 className="text-2xl font-semibold mt-6 mb-3 text-claude-text" {...props}>
       {children}
     </h1>
   ),
   h2: ({ node, className, children, ...props }: any) => (
-    <h2 className="text-xl font-semibold mt-5 mb-2 dark:text-claude-darkText text-claude-text" {...props}>
+    <h2 className="text-xl font-semibold mt-5 mb-2 text-claude-text" {...props}>
       {children}
     </h2>
   ),
   h3: ({ node, className, children, ...props }: any) => (
-    <h3 className="text-lg font-semibold mt-4 mb-2 dark:text-claude-darkText text-claude-text" {...props}>
+    <h3 className="text-lg font-semibold mt-4 mb-2 text-claude-text" {...props}>
       {children}
     </h3>
   ),
   ul: ({ node, className, children, ...props }: any) => (
-    <ul className="list-disc pl-5 my-1.5 dark:text-claude-darkText text-claude-text" {...props}>
+    <ul className="list-disc pl-5 my-1.5 text-claude-text" {...props}>
       {children}
     </ul>
   ),
   ol: ({ node, className, children, ...props }: any) => (
-    <ol className="list-decimal pl-6 my-1.5 dark:text-claude-darkText text-claude-text" {...props}>
+    <ol className="list-decimal pl-6 my-1.5 text-claude-text" {...props}>
       {children}
     </ol>
   ),
   li: ({ node, className, children, ...props }: any) => (
-    <li className="my-0.5 leading-6 dark:text-claude-darkText text-claude-text" {...props}>
+    <li className="my-0.5 leading-6 text-claude-text" {...props}>
       {children}
     </li>
   ),
   blockquote: ({ node, className, children, ...props }: any) => (
-    <blockquote className="border-l-4 border-claude-accent pl-4 py-1 my-2 dark:bg-claude-darkSurface/30 bg-claude-surfaceHover/30 rounded-r-lg dark:text-claude-darkText text-claude-text" {...props}>
+    <blockquote className="border-l-4 border-claude-accent pl-4 py-1 my-2 bg-claude-surfaceHover/30 rounded-r-lg text-claude-text" {...props}>
       {children}
     </blockquote>
   ),
   code: CodeBlock,
   table: ({ node, className, children, ...props }: any) => (
-    <div className="my-4 overflow-x-auto rounded-xl border dark:border-claude-darkBorder border-claude-border">
+    <div className="my-4 overflow-x-auto rounded-xl border border-claude-border">
       <table className="border-collapse w-full" {...props}>
         {children}
       </table>
     </div>
   ),
   thead: ({ node, className, children, ...props }: any) => (
-    <thead className="dark:bg-claude-darkSurface bg-claude-surfaceHover" {...props}>
+    <thead className="bg-claude-surfaceHover" {...props}>
       {children}
     </thead>
   ),
   tbody: ({ node, className, children, ...props }: any) => (
-    <tbody className="divide-y dark:divide-claude-darkBorder divide-claude-border" {...props}>
+    <tbody className="divide-y divide-claude-border" {...props}>
       {children}
     </tbody>
   ),
   tr: ({ node, className, children, ...props }: any) => (
-    <tr className="divide-x dark:divide-claude-darkBorder divide-claude-border" {...props}>
+    <tr className="divide-x divide-claude-border" {...props}>
       {children}
     </tr>
   ),
   th: ({ node, className, children, ...props }: any) => (
-    <th className="px-4 py-2 text-left font-semibold dark:text-claude-darkText text-claude-text" {...props}>
+    <th className="px-4 py-2 text-left font-semibold text-claude-text" {...props}>
       {children}
     </th>
   ),
   td: ({ node, className, children, ...props }: any) => (
-    <td className="px-4 py-2 dark:text-claude-darkText text-claude-text" {...props}>
+    <td className="px-4 py-2 text-claude-text" {...props}>
       {children}
     </td>
   ),
@@ -481,7 +481,7 @@ const createMarkdownComponents = (
     <img className="max-w-full h-auto rounded-xl my-4" {...props} />
   ),
   hr: ({ node, ...props }: any) => (
-    <hr className="my-5 dark:border-claude-darkBorder border-claude-border" {...props} />
+    <hr className="my-5 border-claude-border" {...props} />
   ),
   a: ({ node, href, className, children, ...props }: any) => {
     if (typeof href === 'string' && href.startsWith('#artifact-')) {

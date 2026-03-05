@@ -320,28 +320,28 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
   const canTest = Boolean(email && password && imapHost && smtpHost);
   const connectivityPassed = connectivityResult?.verdict === 'pass';
 
-  const inputClassName = 'block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-xs';
-  const labelClassName = 'block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1';
+  const inputClassName = 'block w-full rounded-xl bg-claude-surfaceInset border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 text-xs';
+  const labelClassName = 'block text-xs font-medium text-claude-text mb-1';
 
   if (loading) {
     return (
-      <div className="p-4 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+      <div className="p-4 text-xs text-claude-textSecondary">
         {i18nService.t('loading')}...
       </div>
     );
   }
 
   return (
-    <div className="space-y-4 p-4 rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/30 bg-claude-surface/30">
+    <div className="space-y-4 p-4 rounded-xl border border-claude-border bg-claude-surface/30">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+        <h4 className="text-sm font-medium text-claude-text">
           {i18nService.t('emailConfig')}
         </h4>
         {onClose && (
           <button
             type="button"
             onClick={onClose}
-            className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors"
+            className="text-xs text-claude-textSecondary hover:text-claude-accent transition-colors"
           >
             {i18nService.t('collapse')}
           </button>
@@ -349,7 +349,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
       </div>
       <div className="min-h-[18px]">
         {(persistError || (isPersisting && showPersisting)) && (
-          <div className={`text-xs ${persistError ? 'text-red-600 dark:text-red-400' : 'text-claude-textSecondary dark:text-claude-darkTextSecondary'}`}>
+          <div className={`text-xs ${persistError ? 'text-red-600 dark:text-red-400' : 'text-claude-textSecondary'}`}>
             {persistError || `${i18nService.t('saving')}...`}
           </div>
         )}
@@ -375,7 +375,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
 
       {/* Hint */}
       {hintKey && (
-        <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2">
+        <div className="text-xs text-claude-textSecondary bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2">
           {i18nService.t(hintKey)}
         </div>
       )}
@@ -410,7 +410,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
       <button
         type="button"
         onClick={() => setShowAdvanced(!showAdvanced)}
-        className="flex items-center gap-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors"
+        className="flex items-center gap-1 text-xs text-claude-textSecondary hover:text-claude-accent transition-colors"
       >
         {showAdvanced ? (
           <ChevronUpIcon className="h-3.5 w-3.5" />
@@ -422,7 +422,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
 
       {/* Advanced Settings */}
       {showAdvanced && (
-        <div className="space-y-3 pl-2 border-l-2 border-claude-border dark:border-claude-darkBorder">
+        <div className="space-y-3 pl-2 border-l-2 border-claude-border">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelClassName}>IMAP Host</label>
@@ -474,7 +474,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
           </div>
 
           <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-xs dark:text-claude-darkText text-claude-text">
+            <label className="flex items-center gap-2 text-xs text-claude-text">
               <input
                 type="checkbox"
                 checked={imapTls === 'true'}
@@ -484,7 +484,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
               />
               IMAP TLS
             </label>
-            <label className="flex items-center gap-2 text-xs dark:text-claude-darkText text-claude-text">
+            <label className="flex items-center gap-2 text-xs text-claude-text">
               <input
                 type="checkbox"
                 checked={smtpSecure === 'true'}
@@ -516,7 +516,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
           type="button"
           onClick={handleConnectivityTest}
           disabled={isTesting || !canTest}
-          className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+          className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border border-claude-border text-claude-text hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
         >
           <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
           {isTesting ? i18nService.t('imConnectivityTesting') : i18nService.t('imConnectivityTest')}
@@ -539,7 +539,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
               <span>
                 {connectivityPassed ? i18nService.t('connectionSuccess') : i18nService.t('connectionFailed')}
               </span>
-              <span className="text-[11px] text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <span className="text-[11px] text-claude-textSecondary">
                 {new Date(connectivityResult.testedAt).toLocaleString()}
               </span>
             </div>
@@ -550,7 +550,7 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                 return (
                   <div
                     key={check.code}
-                    className="rounded-lg border dark:border-claude-darkBorder/60 border-claude-border/60 px-2.5 py-2 dark:bg-claude-darkSurface/25 bg-white/70"
+                    className="rounded-lg border border-claude-border/60 px-2.5 py-2 bg-white/70"
                   >
                     <div className={`flex items-center gap-1 text-xs font-medium ${checkPassed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                       {checkPassed ? (
@@ -560,10 +560,10 @@ const EmailSkillConfig: React.FC<EmailSkillConfigProps> = ({ onClose }) => {
                       )}
                       <span>{checkLabel}</span>
                     </div>
-                    <div className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    <div className="mt-1 text-xs text-claude-textSecondary">
                       {check.message}
                     </div>
-                    <div className="mt-1 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    <div className="mt-1 text-[11px] text-claude-textSecondary">
                       {`${check.durationMs}ms`}
                     </div>
                   </div>
