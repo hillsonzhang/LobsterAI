@@ -15,6 +15,11 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ClipboardDocumentIcon, CheckIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../services/i18n';
 
+const REMARK_PLUGINS_BASE = [remarkGfm];
+const REMARK_PLUGINS_MATH = [remarkGfm, remarkMath];
+const REHYPE_PLUGINS_NONE: any[] = [];
+const REHYPE_PLUGINS_KATEX = [rehypeKatex];
+
 const CODE_BLOCK_LINE_LIMIT = 200;
 const CODE_BLOCK_CHAR_LIMIT = 20000;
 const SYNTAX_HIGHLIGHTER_STYLE = {
@@ -600,13 +605,21 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({
   className = '',
   resolveLocalFilePath,
 }) => {
+  // 延迟启用 KaTeX：先快速渲染文本内容，空闲时再编译公式
+  const [katexReady, setKatexReady] = useState(false);
+
+  useEffect(() => {
+    const id = requestIdleCallback(() => setKatexReady(true));
+    return () => cancelIdleCallback(id);
+  }, []);
+
   const components = useMemo(() => createMarkdownComponents(resolveLocalFilePath), [resolveLocalFilePath]);
   const normalizedContent = useMemo(() => normalizeDisplayMath(encodeFileUrlsInMarkdown(content)), [content]);
   return (
     <div className={`markdown-content text-[15px] leading-6 ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={katexReady ? REMARK_PLUGINS_MATH : REMARK_PLUGINS_BASE}
+        rehypePlugins={katexReady ? REHYPE_PLUGINS_KATEX : REHYPE_PLUGINS_NONE}
         urlTransform={safeUrlTransform}
         components={components}
       >
