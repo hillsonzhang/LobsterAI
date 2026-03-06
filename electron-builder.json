@@ -1,7 +1,7 @@
 {
   "appId": "com.lobsterai.app",
-  "productName": "SD Agent",
-  "executableName": "SD Agent",
+  "productName": "LobsterAI",
+  "executableName": "LobsterAI",
   "directories": {
     "output": "release"
   },
