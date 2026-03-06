@@ -2029,13 +2029,25 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   ) : migrateResult.migrated.length === 0 && migrateResult.backedUp.length === 0 ? (
                     <p>{i18nService.t('migrateDataNoData')}</p>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <p>{i18nService.t('migrateDataSuccess')}</p>
                       {migrateResult.migrated.length > 0 && (
                         <p>{i18nService.t('migrateDataMigrated')}: {migrateResult.migrated.join(', ')}</p>
                       )}
                       {migrateResult.backedUp.length > 0 && (
                         <p>{i18nService.t('migrateDataBackedUp')}: {migrateResult.backedUp.join(', ')}</p>
+                      )}
+                      {migrateResult.migrated.length > 0 && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <span>{i18nService.t('migrateDataRestartHint')}</span>
+                          <button
+                            type="button"
+                            onClick={() => window.electron.migrate.relaunch()}
+                            className="px-3 py-0.5 text-xs rounded-md bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                          >
+                            {i18nService.t('migrateDataRestart')}
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}

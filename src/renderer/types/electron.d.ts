@@ -446,6 +446,7 @@ interface IElectronAPI {
   };
   migrate: {
     fromLegacyData: () => Promise<{ success: boolean; migrated: string[]; backedUp: string[]; error?: string }>;
+    relaunch: () => Promise<void>;
   };
   permissions: {
     checkCalendar: () => Promise<{ success: boolean; status?: string; error?: string; autoRequested?: boolean }>;

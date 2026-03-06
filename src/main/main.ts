@@ -2814,8 +2814,13 @@ if (!gotTheLock) {
       return migrateFromLegacyUserData();
     } catch (e) {
       console.error('[Migration] Unexpected error:', e);
-      return { success: false, migrated: [], skipped: [], error: String(e) };
+      return { success: false, migrated: [], backedUp: [], error: String(e) };
     }
+  });
+
+  ipcMain.handle('app:relaunch', () => {
+    app.relaunch();
+    app.quit();
   });
 
   // 初始化应用

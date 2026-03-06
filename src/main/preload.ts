@@ -354,6 +354,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   migrate: {
     fromLegacyData: () => ipcRenderer.invoke('migrate:fromLegacyData'),
+    relaunch: () => ipcRenderer.invoke('app:relaunch'),
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),

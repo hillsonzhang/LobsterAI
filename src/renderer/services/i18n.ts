@@ -702,6 +702,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     migrateDataFailed: '迁移失败',
     migrateDataBackedUp: '已备份原有数据',
     migrateDataMigrated: '已迁移',
+    migrateDataRestartHint: '需要重启应用才能加载迁移的数据',
+    migrateDataRestart: '立即重启',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -1527,6 +1529,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     migrateDataFailed: 'Migration failed',
     migrateDataBackedUp: 'Backed up existing data',
     migrateDataMigrated: 'Migrated',
+    migrateDataRestartHint: 'Restart the app to load migrated data',
+    migrateDataRestart: 'Restart Now',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',
