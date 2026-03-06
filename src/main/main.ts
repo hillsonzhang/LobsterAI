@@ -2811,7 +2811,17 @@ if (!gotTheLock) {
 
   ipcMain.handle('migrate:fromLegacyData', async () => {
     try {
-      return migrateFromLegacyUserData();
+      const result = migrateFromLegacyUserData();
+      // If files were actually migrated, relaunch immediately.
+      // sql.js holds the old DB in memory and save() would overwrite the
+      // migrated file on any subsequent write, so we must exit before that
+      // happens.  Use app.exit(0) instead of app.quit() to skip close-event
+      // handlers that call save().
+      if (result.success && result.migrated.length > 0) {
+        app.relaunch();
+        app.exit(0);
+      }
+      return result;
     } catch (e) {
       console.error('[Migration] Unexpected error:', e);
       return { success: false, migrated: [], backedUp: [], error: String(e) };
