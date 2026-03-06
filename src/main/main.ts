@@ -2730,7 +2730,10 @@ if (!gotTheLock) {
    * Electron derives userData path from productName, so the directory changed.
    * This copies key data files once so users don't lose conversations/config.
    */
-  function migrateFromLegacyUserData(): void {
+  function migrateFromLegacyUserData(): { success: boolean; migrated: string[]; backedUp: string[]; error?: string } {
+    const migrated: string[] = [];
+    const backedUp: string[] = [];
+
     const currentUserData = app.getPath('userData');
     // Determine legacy path based on platform
     let legacyUserData: string;
@@ -2742,18 +2745,30 @@ if (!gotTheLock) {
       legacyUserData = path.join(os.homedir(), '.config', 'LobsterAI');
     }
 
-    if (legacyUserData === currentUserData) return; // productName unchanged, skip
-    if (!fs.existsSync(legacyUserData)) return; // no legacy data
-
-    // Only migrate if current userData has no database yet (first launch after rename)
-    const currentDb = path.join(currentUserData, 'lobsterai.sqlite');
-    if (fs.existsSync(currentDb)) {
-      console.log('[Migration] Current userData already has database, skipping migration');
-      return;
+    if (legacyUserData === currentUserData) {
+      return { success: true, migrated, backedUp }; // productName unchanged, nothing to do
+    }
+    if (!fs.existsSync(legacyUserData)) {
+      return { success: true, migrated, backedUp }; // no legacy data
     }
 
     console.log(`[Migration] Migrating data from ${legacyUserData} to ${currentUserData}`);
     fs.mkdirSync(currentUserData, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    // Helper: backup existing file/dir before overwriting
+    const backupIfExists = (dst: string, name: string) => {
+      if (fs.existsSync(dst)) {
+        const ext = path.extname(name);
+        const base = ext ? name.slice(0, -ext.length) : name;
+        const backupName = ext ? `${base}.bak-${timestamp}${ext}` : `${name}.bak-${timestamp}`;
+        const backupPath = path.join(path.dirname(dst), backupName);
+        fs.renameSync(dst, backupPath);
+        backedUp.push(name);
+        console.log(`[Migration] Backed up ${name} → ${backupName}`);
+      }
+    };
 
     // Files to migrate
     const filesToCopy = ['lobsterai.sqlite', 'rag.sqlite'];
@@ -2763,31 +2778,45 @@ if (!gotTheLock) {
     for (const file of filesToCopy) {
       const src = path.join(legacyUserData, file);
       const dst = path.join(currentUserData, file);
-      if (fs.existsSync(src)) {
-        try {
-          fs.copyFileSync(src, dst);
-          console.log(`[Migration] Copied ${file}`);
-        } catch (e) {
-          console.error(`[Migration] Failed to copy ${file}:`, e);
-        }
+      if (!fs.existsSync(src)) continue;
+      try {
+        backupIfExists(dst, file);
+        fs.copyFileSync(src, dst);
+        migrated.push(file);
+        console.log(`[Migration] Copied ${file}`);
+      } catch (e) {
+        console.error(`[Migration] Failed to copy ${file}:`, e);
+        return { success: false, migrated, backedUp, error: `Failed to copy ${file}: ${e}` };
       }
     }
 
     for (const dir of dirsToCopy) {
       const src = path.join(legacyUserData, dir);
       const dst = path.join(currentUserData, dir);
-      if (fs.existsSync(src) && !fs.existsSync(dst)) {
-        try {
-          fs.cpSync(src, dst, { recursive: true });
-          console.log(`[Migration] Copied directory ${dir}`);
-        } catch (e) {
-          console.error(`[Migration] Failed to copy directory ${dir}:`, e);
-        }
+      if (!fs.existsSync(src)) continue;
+      try {
+        backupIfExists(dst, dir);
+        fs.cpSync(src, dst, { recursive: true });
+        migrated.push(dir);
+        console.log(`[Migration] Copied directory ${dir}`);
+      } catch (e) {
+        console.error(`[Migration] Failed to copy directory ${dir}:`, e);
+        return { success: false, migrated, backedUp, error: `Failed to copy directory ${dir}: ${e}` };
       }
     }
 
     console.log('[Migration] Data migration complete');
+    return { success: true, migrated, backedUp };
   }
+
+  ipcMain.handle('migrate:fromLegacyData', async () => {
+    try {
+      return migrateFromLegacyUserData();
+    } catch (e) {
+      console.error('[Migration] Unexpected error:', e);
+      return { success: false, migrated: [], skipped: [], error: String(e) };
+    }
+  });
 
   // 初始化应用
   const initApp = async () => {
@@ -2805,9 +2834,6 @@ if (!gotTheLock) {
       console.log('Created default project directory:', defaultProjectDir);
     }
     console.log('[Main] initApp: default project dir ensured');
-
-    // Migrate data from old "LobsterAI" userData directory (if exists)
-    migrateFromLegacyUserData();
 
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();

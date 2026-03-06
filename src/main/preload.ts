@@ -352,6 +352,9 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('scheduledTask:runUpdate', handler);
     },
   },
+  migrate: {
+    fromLegacyData: () => ipcRenderer.invoke('migrate:fromLegacyData'),
+  },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },

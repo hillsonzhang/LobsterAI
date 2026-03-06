@@ -354,6 +354,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [language, setLanguage] = useState<LanguageType>('zh');
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrateResult, setMigrateResult] = useState<{ success: boolean; migrated: string[]; backedUp: string[]; error?: string } | null>(null);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1987,6 +1989,58 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   );
                 })}
               </div>
+            </div>
+
+            {/* Data Migration Section */}
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('migrateData')}
+              </h4>
+              <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary mb-3">
+                {i18nService.t('migrateDataDescription')}
+              </p>
+              <button
+                type="button"
+                disabled={isMigrating}
+                onClick={async () => {
+                  setIsMigrating(true);
+                  setMigrateResult(null);
+                  try {
+                    const result = await window.electron.migrate.fromLegacyData();
+                    setMigrateResult(result);
+                  } catch (e) {
+                    setMigrateResult({ success: false, migrated: [], backedUp: [], error: String(e) });
+                  } finally {
+                    setIsMigrating(false);
+                  }
+                }}
+                className="px-4 py-1.5 text-sm rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text hover:border-claude-accent dark:hover:border-claude-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isMigrating ? i18nService.t('migratingData') : i18nService.t('migrateDataButton')}
+              </button>
+              {migrateResult && (
+                <div className={`mt-3 text-xs rounded-lg p-3 ${
+                  migrateResult.success
+                    ? 'dark:bg-green-900/20 bg-green-50 dark:text-green-400 text-green-700'
+                    : 'dark:bg-red-900/20 bg-red-50 dark:text-red-400 text-red-700'
+                }`}>
+                  {migrateResult.error ? (
+                    <p>{i18nService.t('migrateDataFailed')}: {migrateResult.error}</p>
+                  ) : migrateResult.migrated.length === 0 && migrateResult.backedUp.length === 0 ? (
+                    <p>{i18nService.t('migrateDataNoData')}</p>
+                  ) : (
+                    <div className="space-y-1">
+                      <p>{i18nService.t('migrateDataSuccess')}</p>
+                      {migrateResult.migrated.length > 0 && (
+                        <p>{i18nService.t('migrateDataMigrated')}: {migrateResult.migrated.join(', ')}</p>
+                      )}
+                      {migrateResult.backedUp.length > 0 && (
+                        <p>{i18nService.t('migrateDataBackedUp')}: {migrateResult.backedUp.join(', ')}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         );

@@ -693,6 +693,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchDescription: '系统启动时自动运行应用',
     useSystemProxy: '使用系统代理',
     useSystemProxyDescription: '开启后网络请求将跟随系统代理（保存后生效）',
+    migrateData: '数据迁移',
+    migrateDataDescription: '从旧版 LobsterAI 目录导入对话记录和配置数据。已存在的同名文件会自动备份。',
+    migrateDataButton: '开始迁移',
+    migratingData: '迁移中...',
+    migrateDataSuccess: '迁移完成',
+    migrateDataNoData: '未发现旧版数据，无需迁移',
+    migrateDataFailed: '迁移失败',
+    migrateDataBackedUp: '已备份原有数据',
+    migrateDataMigrated: '已迁移',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -1509,6 +1518,15 @@ const translations: Record<LanguageType, Record<string, string>> = {
     autoLaunchDescription: 'Automatically start the app when you log in',
     useSystemProxy: 'Use System Proxy',
     useSystemProxyDescription: 'When enabled, network requests follow system proxy settings (applies after Save)',
+    migrateData: 'Data Migration',
+    migrateDataDescription: 'Import conversations and configuration from the legacy LobsterAI directory. Existing files will be backed up automatically.',
+    migrateDataButton: 'Start Migration',
+    migratingData: 'Migrating...',
+    migrateDataSuccess: 'Migration complete',
+    migrateDataNoData: 'No legacy data found, nothing to migrate',
+    migrateDataFailed: 'Migration failed',
+    migrateDataBackedUp: 'Backed up existing data',
+    migrateDataMigrated: 'Migrated',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',
