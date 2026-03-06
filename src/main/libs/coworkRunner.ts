@@ -1867,11 +1867,18 @@ export class CoworkRunner extends EventEmitter {
     }
 
     return [
+      '## Windows Shell Environment',
+      '- This session runs on Windows. The Bash tool executes commands in Git Bash (MSYS2/MinGW), NOT PowerShell or cmd.exe.',
+      '- Always use bash/POSIX syntax: ls, cat, grep, find, sed, awk, curl, etc.',
+      '- Do NOT use PowerShell cmdlets (Get-ChildItem, Get-Content, Select-String, Invoke-WebRequest, etc.).',
+      '- Do NOT use cmd.exe built-in syntax (dir, type, copy, del, etc.).',
+      '- Use forward slashes or properly escaped paths. Example: `/c/Users/name/project` or `C:/Users/name/project`.',
+      '- Standard POSIX tools (git, python, node, npm, pip) are available if installed.',
+      '',
       '## Windows Encoding Policy',
-      '- This session runs on Windows. The environment is pre-configured with UTF-8 encoding (LANG=C.UTF-8, chcp 65001).',
+      '- The environment is pre-configured with UTF-8 encoding (LANG=C.UTF-8, chcp 65001).',
       '- If a Bash command returns garbled/mojibake text (e.g. Chinese characters appear as "ÖÐ¹ú" or "ÂÒÂë"), it means the console code page was reset. Fix it by prepending `chcp.com 65001 > /dev/null 2>&1 &&` to the command.',
-      '- For PowerShell commands, use `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` if output is garbled.',
-      '- Always prefer UTF-8 when reading or writing files on Windows (e.g. `Get-Content -Encoding UTF8`, `iconv`, `python -X utf8`).',
+      '- Always prefer UTF-8 when reading or writing files on Windows (e.g. `iconv`, `python -X utf8`).',
     ].join('\n');
   }
 
