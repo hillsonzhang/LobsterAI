@@ -1,5 +1,4 @@
-import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo, McpCategory } from '../types/mcp';
-import { McpMarketplaceServer } from '../types/electron';
+import { McpServerConfig, McpServerFormData, McpRegistryEntry, McpMarketplaceCategoryInfo, McpCategory, McpMarketplaceServer } from '../types/mcp';
 
 /**
  * Convert remote marketplace server data to McpRegistryEntry format.

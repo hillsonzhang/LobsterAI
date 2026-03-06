@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync, readdirSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
@@ -30,6 +30,70 @@ function appendEnvPath(current: string | undefined, additions: string[]): string
   return items.size > 0 ? Array.from(items).join(delimiter) : current;
 }
 
+function hasCommandInEnv(command: string, env: Record<string, string | undefined>): boolean {
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  try {
+    const result = spawnSync(whichCmd, [command], {
+      env: { ...env } as NodeJS.ProcessEnv,
+      encoding: 'utf-8',
+      timeout: 5000,
+      windowsHide: process.platform === 'win32',
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+let cachedElectronNodeRuntimePath: string | null = null;
+
+function resolveElectronNodeRuntimePath(): string {
+  if (!app.isPackaged || process.platform !== 'darwin') {
+    return process.execPath;
+  }
+
+  try {
+    const appName = app.getName();
+    const frameworksDir = join(process.resourcesPath, '..', 'Frameworks');
+    if (!existsSync(frameworksDir)) {
+      return process.execPath;
+    }
+
+    const helperApps = readdirSync(frameworksDir)
+      .filter((entry) => entry.startsWith(`${appName} Helper`) && entry.endsWith('.app'))
+      .sort((a, b) => {
+        const score = (name: string): number => {
+          if (name === `${appName} Helper.app`) return 0;
+          if (name === `${appName} Helper (Renderer).app`) return 1;
+          if (name === `${appName} Helper (Plugin).app`) return 2;
+          if (name === `${appName} Helper (GPU).app`) return 3;
+          return 10;
+        };
+        return score(a) - score(b);
+      });
+
+    for (const helperApp of helperApps) {
+      const helperExeName = helperApp.replace(/\.app$/, '');
+      const helperExePath = join(frameworksDir, helperApp, 'Contents', 'MacOS', helperExeName);
+      if (existsSync(helperExePath)) {
+        coworkLog('INFO', 'resolveNodeShim', `Using Electron helper runtime for node shim: ${helperExePath}`);
+        return helperExePath;
+      }
+    }
+  } catch (error) {
+    coworkLog('WARN', 'resolveNodeShim', `Failed to resolve Electron helper runtime: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return process.execPath;
+}
+
+export function getElectronNodeRuntimePath(): string {
+  if (!cachedElectronNodeRuntimePath) {
+    cachedElectronNodeRuntimePath = resolveElectronNodeRuntimePath();
+  }
+  return cachedElectronNodeRuntimePath;
+}
+
 /**
  * Cached user shell PATH. Resolved once and reused across calls.
  */
@@ -50,13 +114,30 @@ function resolveUserShellPath(): string | null {
 
   try {
     const shell = process.env.SHELL || '/bin/bash';
-    const result = execSync(`${shell} -ilc 'echo __PATH__=$PATH'`, {
-      encoding: 'utf-8',
-      timeout: 5000,
-      env: { ...process.env },
-    });
-    const match = result.match(/__PATH__=(.+)/);
-    cachedUserShellPath = match ? match[1].trim() : null;
+    // Prefer non-interactive login shell first to avoid potential side effects
+    // from interactive startup scripts (which may launch extra GUI processes).
+    const pathProbes = [
+      `${shell} -lc 'echo __PATH__=$PATH'`,
+    ];
+
+    let resolved: string | null = null;
+    for (const probe of pathProbes) {
+      try {
+        const result = execSync(probe, {
+          encoding: 'utf-8',
+          timeout: 5000,
+          env: { ...process.env },
+        });
+        const match = result.match(/__PATH__=(.+)/);
+        if (match?.[1]) {
+          resolved = match[1].trim();
+          break;
+        }
+      } catch {
+        // Try next probe.
+      }
+    }
+    cachedUserShellPath = resolved;
   } catch (error) {
     console.warn('[coworkUtil] Failed to resolve user shell PATH:', error);
     cachedUserShellPath = null;
@@ -69,6 +150,27 @@ function resolveUserShellPath(): string | null {
  * Cached Windows registry PATH. Resolved once and reused.
  */
 let cachedWindowsRegistryPath: string | null | undefined;
+
+function readWindowsRegistryPathValue(registryKey: string): string {
+  try {
+    const output = execSync(`reg query "${registryKey}" /v Path`, {
+      encoding: 'utf-8',
+      timeout: 8000,
+      windowsHide: true,
+    });
+
+    for (const line of output.split(/\r?\n/)) {
+      const match = line.match(/^\s*Path\s+REG_\w+\s+(.+)$/i);
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    }
+  } catch {
+    // Ignore missing keys or access-denied errors.
+  }
+
+  return '';
+}
 
 /**
  * Resolve the latest PATH from the Windows registry (Machine + User).
@@ -94,30 +196,10 @@ function resolveWindowsRegistryPath(): string | null {
   }
 
   try {
-    // Use PowerShell to read both Machine and User PATH from registry.
-    // [Environment]::GetEnvironmentVariable reads directly from the registry,
-    // not from the current process environment, so it always returns the latest values.
-    //
-    // Use -EncodedCommand with Base64 to avoid quote-escaping issues.
-    // When Node.js calls execSync, outer double quotes for `-Command "..."` can
-    // conflict with inner double quotes needed by PowerShell string arguments.
-    // -EncodedCommand bypasses all quoting problems entirely.
-    const psScript = [
-      '$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")',
-      '$userPath = [Environment]::GetEnvironmentVariable("Path", "User")',
-      '[Console]::Write("$machinePath;$userPath")',
-    ].join('; ');
-    // PowerShell -EncodedCommand expects a Base64-encoded UTF-16LE string
-    const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
-
-    const result = execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encodedCommand}`, {
-      encoding: 'utf-8',
-      timeout: 10000,
-      windowsHide: true,
-    });
-
-    const registryPath = result.trim();
-    if (registryPath) {
+    const machinePath = readWindowsRegistryPathValue('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment');
+    const userPath = readWindowsRegistryPathValue('HKCU\\Environment');
+    const registryPath = [machinePath, userPath].filter(Boolean).join(';');
+    if (registryPath.trim()) {
       // Deduplicate and remove empty entries
       const entries = registryPath
         .split(';')
@@ -254,15 +336,43 @@ function checkWindowsGitBashHealth(bashPath: string): { ok: boolean; reason?: st
       return { ok: false, reason: 'path does not exist' };
     }
 
-    const result = spawnSync(
+    // Use a minimal env for the health check to avoid interference from
+    // BASH_ENV, MSYS2_PATH_TYPE, or other env vars that could slow startup.
+    // Only pass PATH + SYSTEMROOT (required for Windows DLL loading) + HOME.
+    const healthEnv: Record<string, string> = {
+      PATH: process.env.PATH || '',
+      SYSTEMROOT: process.env.SYSTEMROOT || process.env.SystemRoot || 'C:\\Windows',
+      HOME: process.env.HOME || process.env.USERPROFILE || '',
+    };
+
+    // Try non-login shell first (-c instead of -lc) for speed.
+    // Login shells source /etc/profile which can be slow on some systems.
+    // cygpath is a standalone binary and does not require a login shell.
+    const fastResult = spawnSync(
       bashPath,
-      ['-lc', 'cygpath -u "C:\\\\Windows"'],
+      ['-c', 'cygpath -u "C:\\\\Windows"'],
       {
         encoding: 'utf-8',
         timeout: 5000,
         windowsHide: true,
+        env: healthEnv,
       }
     );
+
+    const result = (fastResult.error || (typeof fastResult.status === 'number' && fastResult.status !== 0))
+      // Non-login shell failed — retry with login shell and a longer timeout.
+      // Some Git Bash builds require login shell to set up PATH for cygpath.
+      ? spawnSync(
+        bashPath,
+        ['-lc', 'cygpath -u "C:\\\\Windows"'],
+        {
+          encoding: 'utf-8',
+          timeout: 15000,
+          windowsHide: true,
+          env: healthEnv,
+        }
+      )
+      : fastResult;
 
     if (result.error) {
       return { ok: false, reason: result.error.message };
@@ -843,9 +953,15 @@ function ensureWindowsBashUtf8InitScript(): string | null {
 }
 
 function applyPackagedEnvOverrides(env: Record<string, string | undefined>): void {
+  const electronNodeRuntimePath = getElectronNodeRuntimePath();
+
+  if (app.isPackaged && !env.LOBSTERAI_ELECTRON_PATH) {
+    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
+  }
+
   // On Windows, resolve git-bash and ensure Git toolchain directories are available in PATH.
   if (process.platform === 'win32') {
-    env.LOBSTERAI_ELECTRON_PATH = process.execPath;
+    env.LOBSTERAI_ELECTRON_PATH = electronNodeRuntimePath;
 
     // Force UTF-8 encoding for MSYS2/git-bash.
     //
@@ -1033,10 +1149,26 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
   // non-ASCII characters (which break on Windows when cmd.exe uses GBK code page).
   env.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
 
-  const shimDir = ensureElectronNodeShim(process.execPath, npmBinDir);
-  if (shimDir) {
-    env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
-    coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+  const hasSystemNode = hasCommandInEnv('node', env);
+  const hasSystemNpx = hasCommandInEnv('npx', env);
+  const hasSystemNpm = hasCommandInEnv('npm', env);
+  const shouldInjectShim = process.platform === 'win32' || !(hasSystemNode && hasSystemNpx && hasSystemNpm);
+  if (shouldInjectShim) {
+    const shimDir = ensureElectronNodeShim(electronNodeRuntimePath, npmBinDir);
+    if (shimDir) {
+      env.PATH = [shimDir, env.PATH].filter(Boolean).join(delimiter);
+      env.LOBSTERAI_NODE_SHIM_ACTIVE = '1';
+      coworkLog('INFO', 'resolveNodeShim', `Injected Electron Node/npx/npm shim PATH entry: ${shimDir}`);
+
+      // Re-compute ORIGINAL_PATH after shim injection so that git-bash
+      // also sees the bundled node/npx/npm in its PATH.
+      if (process.platform === 'win32') {
+        ensureWindowsOriginalPath(env);
+      }
+    }
+  } else {
+    delete env.LOBSTERAI_NODE_SHIM_ACTIVE;
+    coworkLog('INFO', 'resolveNodeShim', 'System node/npx/npm detected; skipped Electron node shim injection');
   }
 
   const nodePaths = [
@@ -1077,20 +1209,36 @@ function verifyNodeEnvironment(env: Record<string, string | undefined>): void {
         env: { ...env } as NodeJS.ProcessEnv,
         encoding: 'utf-8',
         timeout: 5000,
+        windowsHide: process.platform === 'win32',
       });
       if (result.status === 0 && result.stdout) {
         const resolved = result.stdout.trim();
         coworkLog('INFO', tag, `${whichCmd} ${tool} => ${resolved}`);
+        const resolvedCandidates = resolved
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const resolvedForExec = process.platform === 'win32'
+          ? resolvedCandidates.find((candidate) => /\.(cmd|exe|bat)$/i.test(candidate)) || resolvedCandidates[0]
+          : resolvedCandidates[0];
 
         // Try to get version
-        if (tool === 'node') {
+        if (tool === 'node' && resolvedForExec) {
           try {
-            const versionResult = spawnSync(resolved, ['--version'], {
+            let execTarget = resolvedForExec;
+            if (process.platform === 'win32' && /\.cmd$/i.test(resolvedForExec)) {
+              execTarget = env.LOBSTERAI_ELECTRON_PATH || process.execPath;
+            }
+            const versionResult = spawnSync(execTarget, ['--version'], {
               env: { ...env, ELECTRON_RUN_AS_NODE: '1' } as NodeJS.ProcessEnv,
               encoding: 'utf-8',
               timeout: 5000,
+              windowsHide: process.platform === 'win32',
             });
-            coworkLog('INFO', tag, `node --version => ${(versionResult.stdout || '').trim()} (exit: ${versionResult.status})`);
+            coworkLog('INFO', tag, `node --version (${execTarget}) => ${(versionResult.stdout || '').trim()} (exit: ${versionResult.status})`);
+            if (versionResult.error) {
+              coworkLog('WARN', tag, `node --version spawn error: ${versionResult.error.message}`);
+            }
             if (versionResult.stderr) {
               coworkLog('WARN', tag, `node --version stderr: ${versionResult.stderr.trim()}`);
             }
@@ -1164,7 +1312,11 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
   const skillsRoot = getSkillsRoot().replace(/\\/g, '/');
   env.SKILLS_ROOT = skillsRoot;
   env.LOBSTERAI_SKILLS_ROOT = skillsRoot; // Alternative name for clarity
-  env.LOBSTERAI_ELECTRON_PATH = process.execPath.replace(/\\/g, '/');
+  if (process.platform === 'win32' || env.LOBSTERAI_NODE_SHIM_ACTIVE === '1') {
+    env.LOBSTERAI_ELECTRON_PATH = getElectronNodeRuntimePath().replace(/\\/g, '/');
+  } else {
+    delete env.LOBSTERAI_ELECTRON_PATH;
+  }
 
   // Inject RAG sidecar port file path for knowledge base skill
   // The skill reads port from file at runtime to get the latest port after sidecar restarts
@@ -1250,7 +1402,7 @@ export async function getEnhancedEnvWithTmpdir(
 const SESSION_TITLE_FALLBACK = 'New Session';
 const SESSION_TITLE_MAX_CHARS = 50;
 const SESSION_TITLE_TIMEOUT_MS = 8000;
-const COWORK_MODEL_PROBE_TIMEOUT_MS = 6000;
+const COWORK_MODEL_PROBE_TIMEOUT_MS = 20000;
 const API_ERROR_SNIPPET_MAX_CHARS = 240;
 
 function buildAnthropicMessagesUrl(baseUrl: string): string {

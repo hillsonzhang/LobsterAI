@@ -143,7 +143,7 @@ const SkillsManager: React.FC = () => {
     const query = skillSearchQuery.toLowerCase();
     return skills.filter(skill => {
       const matchesSearch = skill.name.toLowerCase().includes(query)
-        || skillService.getLocalizedSkillDescription(skill.name, skill.description).toLowerCase().includes(query);
+        || skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description).toLowerCase().includes(query);
       return matchesSearch;
     });
   }, [skills, skillSearchQuery]);
@@ -443,7 +443,7 @@ const SkillsManager: React.FC = () => {
               </div>
 
               <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary line-clamp-2 mb-2">
-                {skillService.getLocalizedSkillDescription(skill.name, skill.description)}
+                {skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description)}
               </p>
 
               <div className="flex items-center gap-2 text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -696,7 +696,7 @@ const SkillsManager: React.FC = () => {
             </div>
 
             <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary mb-4">
-              {skillService.getLocalizedSkillDescription(selectedSkill.name, selectedSkill.description)}
+              {skillService.getLocalizedSkillDescription(selectedSkill.id, selectedSkill.name, selectedSkill.description)}
             </p>
 
             <div className="space-y-2 mb-5">
