@@ -2724,6 +2724,71 @@ if (!gotTheLock) {
   process.once('SIGINT', () => handleTerminationSignal('SIGINT'));
   process.once('SIGTERM', () => handleTerminationSignal('SIGTERM'));
 
+  /**
+   * Migrate user data from the legacy "LobsterAI" userData directory.
+   * Earlier versions used productName "LobsterAI"; current builds use "SD Agent".
+   * Electron derives userData path from productName, so the directory changed.
+   * This copies key data files once so users don't lose conversations/config.
+   */
+  function migrateFromLegacyUserData(): void {
+    const currentUserData = app.getPath('userData');
+    // Determine legacy path based on platform
+    let legacyUserData: string;
+    if (process.platform === 'darwin') {
+      legacyUserData = path.join(os.homedir(), 'Library', 'Application Support', 'LobsterAI');
+    } else if (process.platform === 'win32') {
+      legacyUserData = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'LobsterAI');
+    } else {
+      legacyUserData = path.join(os.homedir(), '.config', 'LobsterAI');
+    }
+
+    if (legacyUserData === currentUserData) return; // productName unchanged, skip
+    if (!fs.existsSync(legacyUserData)) return; // no legacy data
+
+    // Only migrate if current userData has no database yet (first launch after rename)
+    const currentDb = path.join(currentUserData, 'lobsterai.sqlite');
+    if (fs.existsSync(currentDb)) {
+      console.log('[Migration] Current userData already has database, skipping migration');
+      return;
+    }
+
+    console.log(`[Migration] Migrating data from ${legacyUserData} to ${currentUserData}`);
+    fs.mkdirSync(currentUserData, { recursive: true });
+
+    // Files to migrate
+    const filesToCopy = ['lobsterai.sqlite', 'rag.sqlite'];
+    // Directories to copy
+    const dirsToCopy = ['lightrag_data'];
+
+    for (const file of filesToCopy) {
+      const src = path.join(legacyUserData, file);
+      const dst = path.join(currentUserData, file);
+      if (fs.existsSync(src)) {
+        try {
+          fs.copyFileSync(src, dst);
+          console.log(`[Migration] Copied ${file}`);
+        } catch (e) {
+          console.error(`[Migration] Failed to copy ${file}:`, e);
+        }
+      }
+    }
+
+    for (const dir of dirsToCopy) {
+      const src = path.join(legacyUserData, dir);
+      const dst = path.join(currentUserData, dir);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        try {
+          fs.cpSync(src, dst, { recursive: true });
+          console.log(`[Migration] Copied directory ${dir}`);
+        } catch (e) {
+          console.error(`[Migration] Failed to copy directory ${dir}:`, e);
+        }
+      }
+    }
+
+    console.log('[Migration] Data migration complete');
+  }
+
   // 初始化应用
   const initApp = async () => {
     console.log('[Main] initApp: waiting for app.whenReady()');
@@ -2740,6 +2805,9 @@ if (!gotTheLock) {
       console.log('Created default project directory:', defaultProjectDir);
     }
     console.log('[Main] initApp: default project dir ensured');
+
+    // Migrate data from old "LobsterAI" userData directory (if exists)
+    migrateFromLegacyUserData();
 
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();
