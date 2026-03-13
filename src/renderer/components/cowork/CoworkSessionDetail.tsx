@@ -1735,15 +1735,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 
-  const displayItems = useMemo(
-    () => currentSession ? buildDisplayItems(currentSession.messages) : [],
-    [currentSession?.messages]
-  );
-  const turns = useMemo(
-    () => buildConversationTurns(displayItems),
-    [displayItems]
-  );
-
   if (!currentSession) {
     return null;
   }
