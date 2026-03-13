@@ -12,6 +12,7 @@ import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { summarizeConversation } from './coworkContextCompressor';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { cpRecursiveSync } from '../fsCompat';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
@@ -76,6 +77,7 @@ const STREAMING_THINKING_MAX_CHARS = 60_000;
 const TOOL_RESULT_MAX_CHARS = 120_000;
 const FINAL_RESULT_MAX_CHARS = 120_000;
 const STDERR_TAIL_MAX_CHARS = 24_000;
+const AUTO_COMPACT_THRESHOLD = 102_400; // 80% of 128K context limit
 const SDK_STARTUP_TIMEOUT_MS = 30_000;
 const SDK_STARTUP_TIMEOUT_WITH_USER_MCP_MS = 120_000;
 const STDERR_FATAL_PATTERNS = [
@@ -95,6 +97,25 @@ const STDERR_FATAL_PATTERNS = [
   /overloaded/i,
 ];
 const CONTENT_TRUNCATED_HINT = '\n...[truncated to prevent memory pressure]';
+
+/** Returns true if the error message indicates the model's context window was exceeded. */
+function isContextLengthError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('maximum context length') ||
+    lower.includes('context_length_exceeded') ||
+    lower.includes('context window') ||
+    lower.includes('exceeds the maximum') ||
+    lower.includes('reduce the length of the messages') ||
+    // Chinese-language context length errors (GLM, Qwen, etc.)
+    lower.includes('上下文长度超') ||
+    lower.includes('上下文超出') ||
+    lower.includes('上下文长度') ||
+    lower.includes('最大token') ||
+    lower.includes('token数量超') ||
+    lower.includes('请求的token数超')
+  );
+}
 const TOOL_INPUT_PREVIEW_MAX_CHARS = 4000;
 const TOOL_INPUT_PREVIEW_MAX_DEPTH = 5;
 const TOOL_INPUT_PREVIEW_MAX_KEYS = 60;
@@ -411,6 +432,8 @@ export interface CoworkRunnerEvents {
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
+  tokenUsage: (sessionId: string, usage: { inputTokens: number; outputTokens: number }) => void;
+  contextCompacted: (sessionId: string, info: { tokensBefore: number; tokensAfter: number; tokensFreed: number; mode: 'auto' | 'manual' }) => void;
 }
 
 export interface PermissionRequest {
@@ -451,6 +474,8 @@ interface ActiveSession {
   sandboxTurnResolve?: (result: { status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean; memoryFailed: boolean }) => void;
   /** When true, auto-approve all tool permissions (for scheduled tasks) */
   autoApprove?: boolean;
+  /** Per-API-call input tokens from the latest message_start event */
+  lastMessageStartInputTokens: number;
 }
 
 interface PendingPermission {
@@ -510,6 +535,7 @@ export class CoworkRunner extends EventEmitter {
   private turnMemoryQueue: QueuedTurnMemoryUpdate[] = [];
   private turnMemoryQueueKeys: Set<string> = new Set();
   private lastTurnMemoryKeyBySession: Map<string, string> = new Map();
+  private compactingSessionIds: Set<string> = new Set();
   private drainingTurnMemoryQueue = false;
   private mcpServerProvider?: () => Array<{
     name: string;
@@ -1682,13 +1708,26 @@ export class CoworkRunner extends EventEmitter {
       history.pop();
     }
 
+    // Find the last compact summary boundary first - we only need messages from this point forward
+    let compactBoundaryIdx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].metadata?.isCompactSummary) {
+        compactBoundaryIdx = i;
+        break;
+      }
+    }
+
+    // If there's a compact boundary, only consider messages from the boundary onward
+    const startIdx = compactBoundaryIdx >= 0 ? compactBoundaryIdx : 0;
+    const relevantHistory = history.slice(startIdx);
+
     const selectedFromNewest: string[] = [];
     let totalChars = 0;
-    for (let i = history.length - 1; i >= 0; i -= 1) {
+    for (let i = relevantHistory.length - 1; i >= 0; i -= 1) {
       if (selectedFromNewest.length >= limits.maxMessages) {
         break;
       }
-      const block = this.formatSandboxHistoryMessage(history[i]);
+      const block = this.formatSandboxHistoryMessage(relevantHistory[i]);
       if (!block) {
         continue;
       }
@@ -1701,11 +1740,21 @@ export class CoworkRunner extends EventEmitter {
             selectedFromNewest.push(truncated);
           }
         }
+        // If we haven't reached the compact summary yet, keep going to include it
+        if (i > 0 && relevantHistory[0].metadata?.isCompactSummary) {
+          // Skip this message but continue to reach the summary
+          continue;
+        }
         break;
       }
 
       selectedFromNewest.push(block);
       totalChars = nextTotal;
+
+      // Stop at compact summary boundary - it already contains prior context
+      if (relevantHistory[i].metadata?.isCompactSummary) {
+        break;
+      }
     }
 
     return selectedFromNewest.reverse();
@@ -2510,6 +2559,7 @@ export class CoworkRunner extends EventEmitter {
       hasAssistantThinkingOutput: false,
       executionMode: 'local',
       autoApprove: options.autoApprove ?? false,
+      lastMessageStartInputTokens: 0,
     };
     this.activeSessions.set(sessionId, activeSession);
     if (session.cwd !== sessionCwd) {
@@ -2654,6 +2704,93 @@ export class CoworkRunner extends EventEmitter {
     this.clearPendingPermissions(sessionId);
     this.clearSandboxPermissions(sessionId);
     this.store.updateSession(sessionId, { status: 'idle' });
+  }
+
+  async compactSession(sessionId: string, mode: 'auto' | 'manual'): Promise<{ tokensBefore: number; tokensAfter: number; tokensFreed: number }> {
+    // Prevent concurrent compaction on the same session
+    if (this.compactingSessionIds.has(sessionId)) {
+      throw new Error('Session is already being compacted');
+    }
+    this.compactingSessionIds.add(sessionId);
+
+    try {
+      return await this._doCompactSession(sessionId, mode);
+    } finally {
+      this.compactingSessionIds.delete(sessionId);
+    }
+  }
+
+  private async _doCompactSession(sessionId: string, mode: 'auto' | 'manual'): Promise<{ tokensBefore: number; tokensAfter: number; tokensFreed: number }> {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Find messages to summarize - only those after the last compact summary
+    const allMessages = session.messages;
+    let compactBoundaryIndex = -1;
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      if (allMessages[i].metadata?.isCompactSummary) {
+        compactBoundaryIndex = i;
+        break;
+      }
+    }
+    // Skip the compact summary itself to avoid re-summarizing it
+    const startIndex = compactBoundaryIndex >= 0 ? compactBoundaryIndex + 1 : 0;
+    const messages = allMessages.slice(startIndex).filter(
+      (m) => m.content?.trim()
+    );
+    if (messages.length < 2) {
+      throw new Error('Not enough messages to compact');
+    }
+
+    coworkLog('INFO', 'contextCompact', `Starting ${mode} context compaction`, {
+      sessionId,
+      messageCount: messages.length,
+    });
+
+    // Stop the active session first to ensure clean state
+    const activeSession = this.activeSessions.get(sessionId);
+    if (activeSession) {
+      this.stopSession(sessionId);
+    }
+
+    try {
+      const result = await summarizeConversation(messages);
+
+      // Insert the summary as a context boundary (existing messages preserved for UI display)
+      const summaryMessage = this.store.addMessage(sessionId, {
+        type: 'system',
+        content: result.summary,
+        metadata: { isCompactSummary: true, tokensBefore: result.tokensBefore, tokensFreed: result.tokensFreed },
+      });
+
+      // Reset persisted token usage so percentage starts fresh after compaction
+      this.store.updateSessionTokenUsage(sessionId, 0, 0);
+
+      this.emit('contextCompacted', sessionId, {
+        tokensBefore: result.tokensBefore,
+        tokensAfter: result.tokensAfter,
+        tokensFreed: result.tokensFreed,
+        mode,
+      });
+
+      coworkLog('INFO', 'contextCompact', `Context compaction complete (${mode})`, {
+        sessionId,
+        tokensBefore: result.tokensBefore,
+        tokensAfter: result.tokensAfter,
+        tokensFreed: result.tokensFreed,
+      });
+
+      return {
+        tokensBefore: result.tokensBefore,
+        tokensAfter: result.tokensAfter,
+        tokensFreed: result.tokensFreed,
+      };
+    } catch (error) {
+      coworkLog('ERROR', 'contextCompact', `Context compaction failed: ${error instanceof Error ? error.message : String(error)}`, { sessionId });
+      throw error;
+    }
   }
 
   respondToPermission(requestId: string, result: PermissionResult): void {
@@ -4809,15 +4946,39 @@ export class CoworkRunner extends EventEmitter {
     }
 
     if (eventType === 'result') {
-      // Log token usage for observability
+      // Estimate context usage from stored messages via lightweight SQL query
+      // (not API usage fields which are unreliable due to prompt caching and SDK cumulation).
+      const { estimatedTokens, totalChars, messageCount } = this.store.estimateSessionTokens(sessionId);
+      const outputTokens = 0;
+
+      // Log both estimated and API-reported usage for comparison
       const usage = (payload.usage ?? (payload.result && typeof payload.result === 'object' ? (payload.result as Record<string, unknown>).usage : undefined)) as Record<string, unknown> | undefined;
-      if (usage) {
-        coworkLog('INFO', 'tokenUsage', 'Turn token usage', {
-          sessionId,
-          inputTokens: usage.input_tokens,
-          outputTokens: usage.output_tokens,
-          cacheReadInputTokens: usage.cache_read_input_tokens,
-          cacheCreationInputTokens: usage.cache_creation_input_tokens,
+      const perCallTokens = activeSession.lastMessageStartInputTokens;
+      activeSession.lastMessageStartInputTokens = 0;
+
+      coworkLog('INFO', 'tokenUsage', 'Turn token usage', {
+        sessionId,
+        inputTokens: estimatedTokens,
+        messageChars: totalChars,
+        messageCount,
+        perCallTokens,
+        apiRawInputTokens: usage && typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
+        apiCacheRead: usage && typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0,
+        apiCacheCreation: usage && typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0,
+      });
+      this.emit('tokenUsage', sessionId, { inputTokens: estimatedTokens, outputTokens });
+      this.store.updateSessionTokenUsage(sessionId, estimatedTokens, outputTokens);
+
+      // Auto-compact when token count exceeds threshold.
+      // Use the larger of estimated (chars/4 from stored messages) and perCallTokens (from
+      // message_start or message_delta usage events). For Anthropic API, perCallTokens is
+      // accurate. For OpenAI-compat, it reflects actual prompt_tokens when stream_options
+      // include_usage is enabled; otherwise falls back to estimatedTokens.
+      const effectiveTokens = Math.max(estimatedTokens, perCallTokens);
+      if (effectiveTokens > AUTO_COMPACT_THRESHOLD) {
+        coworkLog('INFO', 'contextCompact', `Auto-compact triggered: effectiveTokens=${effectiveTokens} (estimated=${estimatedTokens}, perCall=${perCallTokens}) > ${AUTO_COMPACT_THRESHOLD}`, { sessionId });
+        this.compactSession(sessionId, 'auto').catch((err) => {
+          coworkLog('WARN', 'contextCompact', `Auto-compact failed: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
         });
       }
 
@@ -4836,6 +4997,25 @@ export class CoworkRunner extends EventEmitter {
             : payloadError
               ? payloadError
               : 'Claude run failed';
+
+        // Detect context length exceeded errors and auto-compact instead of failing.
+        if (isContextLengthError(errorMessage) && !this.compactingSessionIds.has(sessionId)) {
+          coworkLog('INFO', 'contextCompact', 'Context overflow detected, triggering auto-compact', { sessionId, errorMessage: errorMessage.slice(0, 200) });
+          // Set status to error so the post-event-loop code skips emitting 'complete'.
+          this.store.updateSession(sessionId, { status: 'error' });
+          this.compactSession(sessionId, 'auto')
+            .then(() => {
+              // Notify user to resend (contextCompacted event already shows compaction notice).
+              // Emit 'error' (empty msg) so the frontend unlocks the input field.
+              this.emit('error', sessionId, '');
+            })
+            .catch((err) => {
+              coworkLog('WARN', 'contextCompact', `Auto-compact after overflow failed: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
+              this.handleError(sessionId, errorMessage);
+            });
+          return;
+        }
+
         this.handleError(sessionId, errorMessage);
         return;
       }
@@ -5053,6 +5233,33 @@ export class CoworkRunner extends EventEmitter {
     if (!event || typeof event !== 'object') return;
 
     const eventType = String(event.type ?? '');
+
+    // Capture per-API-call input token usage from message_start.
+    // Each API call in a tool-use loop emits its own message_start with accurate usage,
+    // so we always keep the latest (which has the largest context).
+    if (eventType === 'message_start') {
+      const message = event.message as Record<string, unknown> | undefined;
+      const usage = message?.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        const raw = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
+        const cacheRead = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0;
+        const cacheCreation = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0;
+        activeSession.lastMessageStartInputTokens = raw + cacheRead + cacheCreation;
+      }
+      return;
+    }
+
+    // For OpenAI-compat mode, the proxy emits message_start with input_tokens=0 (unknown at
+    // stream start). When stream_options.include_usage is enabled, the final stream chunk carries
+    // prompt_tokens which the proxy forwards here as message_delta.usage.input_tokens.
+    if (eventType === 'message_delta') {
+      const usage = event.usage as Record<string, unknown> | undefined;
+      const inputTokens = typeof usage?.input_tokens === 'number' ? usage.input_tokens : 0;
+      if (inputTokens > 0) {
+        activeSession.lastMessageStartInputTokens = Math.max(activeSession.lastMessageStartInputTokens, inputTokens);
+      }
+      return;
+    }
 
     // Handle content_block_start - create a new streaming message
     if (eventType === 'content_block_start') {
