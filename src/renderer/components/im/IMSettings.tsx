@@ -408,7 +408,7 @@ const IMSettings: React.FC = () => {
       type="button"
       onClick={() => handleConnectivityTest(platform)}
       disabled={isLoading || testingPlatform === platform}
-      className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+      className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border border-claude-border text-claude-text hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
     >
       <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
       {testingPlatform === platform
@@ -435,7 +435,7 @@ const IMSettings: React.FC = () => {
   return (
     <div className="flex h-full gap-4">
       {/* Platform List - Left Side */}
-      <div className="w-48 flex-shrink-0 border-r dark:border-claude-darkBorder border-claude-border pr-3 space-y-2 overflow-y-auto">
+      <div className="w-48 flex-shrink-0 border-r border-claude-border pr-3 space-y-2 overflow-y-auto">
         {platforms.map((platform) => {
           const meta = platformMeta[platform];
           const isEnabled = isPlatformEnabled(platform);
@@ -448,7 +448,7 @@ const IMSettings: React.FC = () => {
               className={`flex items-center p-2 rounded-xl cursor-pointer transition-colors ${
                 activePlatform === platform
                   ? 'bg-claude-accent/10 dark:bg-claude-accent/20 border border-claude-accent/30 shadow-subtle'
-                  : 'dark:bg-claude-darkSurface/50 bg-claude-surface hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover border border-transparent'
+                  : 'bg-claude-surface hover:bg-claude-surfaceHover border border-transparent'
               }`}
             >
               <div className="flex flex-1 items-center">
@@ -462,7 +462,7 @@ const IMSettings: React.FC = () => {
                 <span className={`text-sm font-medium truncate ${
                   activePlatform === platform
                     ? 'text-claude-accent'
-                    : 'dark:text-claude-darkText text-claude-text'
+                    : 'text-claude-text'
                 }`}>
                   {i18nService.t(platform)}
                 </span>
@@ -472,7 +472,7 @@ const IMSettings: React.FC = () => {
                   className={`w-7 h-4 rounded-full flex items-center transition-colors ${
                     isEnabled
                       ? (isConnected ? 'bg-green-500' : 'bg-yellow-500')
-                      : 'dark:bg-claude-darkBorder bg-claude-border'
+                      : 'bg-claude-border'
                   } ${(!canToggle || togglingPlatform === platform) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -494,16 +494,16 @@ const IMSettings: React.FC = () => {
       {/* Platform Settings - Right Side */}
       <div className="flex-1 min-w-0 pl-4 pr-2 space-y-4 overflow-y-auto [scrollbar-gutter:stable]">
         {/* Header with status */}
-        <div className="flex items-center gap-3 pb-3 border-b dark:border-claude-darkBorder/60 border-claude-border/60">
+        <div className="flex items-center gap-3 pb-3 border-b border-claude-border/60">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white dark:bg-claude-darkBorder/30 p-1">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white p-1">
               <img
                 src={platformMeta[activePlatform].logo}
                 alt={platformMeta[activePlatform].label}
                 className="w-4 h-4 object-contain rounded"
               />
             </div>
-            <h3 className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+            <h3 className="text-sm font-medium text-claude-text">
               {`${i18nService.t(activePlatform)}${i18nService.t('settings')}`}
             </h3>
           </div>
@@ -525,7 +525,7 @@ const IMSettings: React.FC = () => {
           <div className="space-y-3">
             {/* Client ID */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Client ID (AppKey)
               </label>
               <div className="relative">
@@ -534,7 +534,7 @@ const IMSettings: React.FC = () => {
                   value={config.dingtalk.clientId}
                   onChange={(e) => handleDingTalkChange('clientId', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="dingxxxxxx"
                 />
                 {config.dingtalk.clientId && (
@@ -542,7 +542,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleDingTalkChange('clientId', ''); void imService.updateConfig({ dingtalk: { ...config.dingtalk, clientId: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -554,7 +554,7 @@ const IMSettings: React.FC = () => {
 
             {/* Client Secret */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Client Secret (AppSecret)
               </label>
               <div className="relative">
@@ -563,7 +563,7 @@ const IMSettings: React.FC = () => {
                   value={config.dingtalk.clientSecret}
                   onChange={(e) => handleDingTalkChange('clientSecret', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -571,7 +571,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleDingTalkChange('clientSecret', ''); void imService.updateConfig({ dingtalk: { ...config.dingtalk, clientSecret: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -580,7 +580,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'dingtalk.clientSecret': !prev['dingtalk.clientSecret'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                     title={showSecrets['dingtalk.clientSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['dingtalk.clientSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -607,7 +607,7 @@ const IMSettings: React.FC = () => {
           <div className="space-y-3">
             {/* App ID */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 App ID
               </label>
               <div className="relative">
@@ -616,7 +616,7 @@ const IMSettings: React.FC = () => {
                   value={config.feishu.appId}
                   onChange={(e) => handleFeishuChange('appId', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="cli_xxxxx"
                 />
                 {config.feishu.appId && (
@@ -624,7 +624,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleFeishuChange('appId', ''); void imService.updateConfig({ feishu: { ...config.feishu, appId: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -636,7 +636,7 @@ const IMSettings: React.FC = () => {
 
             {/* App Secret */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 App Secret
               </label>
               <div className="relative">
@@ -645,7 +645,7 @@ const IMSettings: React.FC = () => {
                   value={config.feishu.appSecret}
                   onChange={(e) => handleFeishuChange('appSecret', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -653,7 +653,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleFeishuChange('appSecret', ''); void imService.updateConfig({ feishu: { ...config.feishu, appSecret: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -662,7 +662,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'feishu.appSecret': !prev['feishu.appSecret'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                     title={showSecrets['feishu.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['feishu.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -771,7 +771,7 @@ const IMSettings: React.FC = () => {
           <div className="space-y-3">
             {/* Bot Token */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Bot Token
               </label>
               <div className="relative">
@@ -780,7 +780,7 @@ const IMSettings: React.FC = () => {
                   value={config.telegram.botToken}
                   onChange={(e) => handleTelegramChange('botToken', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -788,7 +788,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleTelegramChange('botToken', ''); void imService.updateConfig({ telegram: { ...config.telegram, botToken: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -797,21 +797,21 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'telegram.botToken': !prev['telegram.botToken'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                     title={showSecrets['telegram.botToken'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['telegram.botToken'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 {i18nService.t('telegramTokenHint') || '从 @BotFather 获取 Bot Token'}
               </p>
             </div>
 
             {/* Allowed User IDs */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Allowed User IDs
               </label>
               <div className="flex gap-2">
@@ -831,7 +831,7 @@ const IMSettings: React.FC = () => {
                       }
                     }
                   }}
-                  className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  className="block flex-1 rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 text-sm transition-colors"
                   placeholder={i18nService.t('telegramAllowedUserIdsPlaceholder') || '输入 Telegram User ID'}
                 />
                 <button
@@ -855,7 +855,7 @@ const IMSettings: React.FC = () => {
                   {(config.telegram.allowedUserIds || []).map((id) => (
                     <span
                       key={id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-claude-surface/80 border-claude-border/60 border text-claude-text"
                     >
                       {id}
                       <button
@@ -865,7 +865,7 @@ const IMSettings: React.FC = () => {
                           handleTelegramChange('allowedUserIds', newIds);
                           void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
                         }}
-                        className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                        className="text-claude-textSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
                       >
                         <XMarkIcon className="w-3 h-3" />
                       </button>
@@ -873,7 +873,7 @@ const IMSettings: React.FC = () => {
                   ))}
                 </div>
               )}
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 {i18nService.t('telegramAllowedUserIdsHint') || '限制只有白名单中的用户可以与 Bot 交互。留空则允许所有用户。'}
               </p>
             </div>
@@ -903,7 +903,7 @@ const IMSettings: React.FC = () => {
           <div className="space-y-3">
             {/* Bot Token */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Bot Token
               </label>
               <div className="relative">
@@ -912,7 +912,7 @@ const IMSettings: React.FC = () => {
                   value={config.discord.botToken}
                   onChange={(e) => handleDiscordChange('botToken', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4OQ..."
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -920,7 +920,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleDiscordChange('botToken', ''); void imService.updateConfig({ discord: { ...config.discord, botToken: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -929,14 +929,14 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'discord.botToken': !prev['discord.botToken'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                     title={showSecrets['discord.botToken'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['discord.botToken'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 从 Discord Developer Portal 获取 Bot Token
               </p>
             </div>
@@ -979,7 +979,7 @@ const IMSettings: React.FC = () => {
 
             {/* App Key */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 App Key
               </label>
               <div className="relative">
@@ -988,7 +988,7 @@ const IMSettings: React.FC = () => {
                   value={config.nim.appKey}
                   onChange={(e) => handleNimChange('appKey', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="your_app_key"
                 />
                 {config.nim.appKey && (
@@ -996,7 +996,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleNimChange('appKey', ''); void imService.updateConfig({ nim: { ...config.nim, appKey: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1004,14 +1004,14 @@ const IMSettings: React.FC = () => {
                   </div>
                 )}
               </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 {i18nService.t('nimAppKeyHint') || '从云信控制台应用信息中获取'}
               </p>
             </div>
 
             {/* Account */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Account (accid)
               </label>
               <div className="relative">
@@ -1020,7 +1020,7 @@ const IMSettings: React.FC = () => {
                   value={config.nim.account}
                   onChange={(e) => handleNimChange('account', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder={i18nService.t('nimAccountPlaceholder') || 'bot_account_id'}
                 />
                 {config.nim.account && (
@@ -1028,7 +1028,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleNimChange('account', ''); void imService.updateConfig({ nim: { ...config.nim, account: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1036,14 +1036,14 @@ const IMSettings: React.FC = () => {
                   </div>
                 )}
               </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 {i18nService.t('nimAccountHint') || '在云信控制台"账号管理"中创建的 IM 账号 ID'}
               </p>
             </div>
 
             {/* Token */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Token
               </label>
               <div className="relative">
@@ -1052,7 +1052,7 @@ const IMSettings: React.FC = () => {
                   value={config.nim.token}
                   onChange={(e) => handleNimChange('token', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -1060,7 +1060,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleNimChange('token', ''); void imService.updateConfig({ nim: { ...config.nim, token: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1069,21 +1069,21 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'nim.token': !prev['nim.token'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                     title={showSecrets['nim.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['nim.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 {i18nService.t('nimTokenHint') || '为该账号生成的访问凭证（建议设置为长期有效）'}
               </p>
             </div>
 
             {/* Account Whitelist */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 {i18nService.t('nimAccountWhitelist') || '白名单账号'}
               </label>
               <div className="relative">
@@ -1092,7 +1092,7 @@ const IMSettings: React.FC = () => {
                   value={config.nim.accountWhitelist}
                   onChange={(e) => handleNimChange('accountWhitelist', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="account1,account2"
                 />
                 {config.nim.accountWhitelist && (
@@ -1100,7 +1100,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleNimChange('accountWhitelist', ''); void imService.updateConfig({ nim: { ...config.nim, accountWhitelist: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1108,7 +1108,7 @@ const IMSettings: React.FC = () => {
                   </div>
                 )}
               </div>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              <p className="text-xs text-claude-textSecondary">
                 {i18nService.t('nimAccountWhitelistHint') || '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。'}
               </p>
             </div>
@@ -1229,7 +1229,7 @@ const IMSettings: React.FC = () => {
           <div className="space-y-3">
             {/* Client ID */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Client ID
               </label>
               <div className="relative">
@@ -1238,7 +1238,7 @@ const IMSettings: React.FC = () => {
                   value={config.xiaomifeng.clientId}
                   onChange={(e) => handleXiaomifengChange('clientId', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder={i18nService.t('xiaomifengClientIdPlaceholder') || '您的Client ID'}
                 />
                 {config.xiaomifeng.clientId && (
@@ -1246,7 +1246,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleXiaomifengChange('clientId', ''); void imService.updateConfig({ xiaomifeng: { ...config.xiaomifeng, clientId: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1258,7 +1258,7 @@ const IMSettings: React.FC = () => {
 
             {/* Client Secret */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              <label className="block text-xs font-medium text-claude-textSecondary">
                 Client Secret
               </label>
               <div className="relative">
@@ -1267,7 +1267,7 @@ const IMSettings: React.FC = () => {
                   value={config.xiaomifeng.secret}
                   onChange={(e) => handleXiaomifengChange('secret', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
@@ -1275,7 +1275,7 @@ const IMSettings: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => { handleXiaomifengChange('secret', ''); void imService.updateConfig({ xiaomifeng: { ...config.xiaomifeng, secret: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1284,7 +1284,7 @@ const IMSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowSecrets(prev => ({ ...prev, 'xiaomifeng.secret': !prev['xiaomifeng.secret'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
                     title={showSecrets['xiaomifeng.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
                     {showSecrets['xiaomifeng.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
@@ -1408,18 +1408,18 @@ const IMSettings: React.FC = () => {
             onClick={() => setConnectivityModalPlatform(null)}
           >
             <div
-              className="w-full max-w-2xl dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal border dark:border-claude-darkBorder border-claude-border overflow-hidden"
+              className="w-full max-w-2xl bg-claude-surface rounded-2xl shadow-modal border border-claude-border overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="px-4 py-3 border-b dark:border-claude-darkBorder border-claude-border flex items-center justify-between">
-                <div className="text-sm font-semibold dark:text-claude-darkText text-claude-text">
+              <div className="px-4 py-3 border-b border-claude-border flex items-center justify-between">
+                <div className="text-sm font-semibold text-claude-text">
                   {`${i18nService.t(connectivityModalPlatform)} ${i18nService.t('imConnectivitySectionTitle')}`}
                 </div>
                 <button
                   type="button"
                   aria-label={i18nService.t('close')}
                   onClick={() => setConnectivityModalPlatform(null)}
-                  className="p-1 rounded-md dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary"
+                  className="p-1 rounded-md hover:bg-claude-surfaceHover text-claude-textSecondary"
                 >
                   <XMarkIcon className="h-4 w-4" />
                 </button>
@@ -1427,7 +1427,7 @@ const IMSettings: React.FC = () => {
 
               <div className="p-4 max-h-[65vh] overflow-y-auto">
                 {testingPlatform === connectivityModalPlatform ? (
-                  <div className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <div className="text-sm text-claude-textSecondary">
                     {i18nService.t('imConnectivityTesting')}
                   </div>
                 ) : connectivityResults[connectivityModalPlatform] ? (
@@ -1443,7 +1443,7 @@ const IMSettings: React.FC = () => {
                         )}
                         {i18nService.t(`imConnectivityVerdict_${connectivityResults[connectivityModalPlatform]!.verdict}`)}
                       </div>
-                      <div className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      <div className="text-[11px] text-claude-textSecondary">
                         {`${i18nService.t('imConnectivityLastChecked')}: ${formatTestTime(connectivityResults[connectivityModalPlatform]!.testedAt)}`}
                       </div>
                     </div>
@@ -1452,16 +1452,16 @@ const IMSettings: React.FC = () => {
                       {connectivityResults[connectivityModalPlatform]!.checks.map((check, index) => (
                         <div
                           key={`${check.code}-${index}`}
-                          className="rounded-lg border dark:border-claude-darkBorder/60 border-claude-border/60 px-2.5 py-2 dark:bg-claude-darkSurface/25 bg-white/70"
+                          className="rounded-lg border border-claude-border/60 px-2.5 py-2 bg-white/70"
                         >
                           <div className={`text-xs font-medium ${checkLevelColorClass[check.level]}`}>
                             {getCheckTitle(check.code)}
                           </div>
-                          <div className="mt-1 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                          <div className="mt-1 text-xs text-claude-textSecondary">
                             {check.message}
                           </div>
                           {getCheckSuggestion(check) && (
-                            <div className="mt-1 text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            <div className="mt-1 text-[11px] text-claude-textSecondary">
                               {`${i18nService.t('imConnectivitySuggestion')}: ${getCheckSuggestion(check)}`}
                             </div>
                           )}
@@ -1470,13 +1470,13 @@ const IMSettings: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <div className="text-sm text-claude-textSecondary">
                     {i18nService.t('imConnectivityNoResult')}
                   </div>
                 )}
               </div>
 
-              <div className="px-4 py-3 border-t dark:border-claude-darkBorder border-claude-border flex items-center justify-end">
+              <div className="px-4 py-3 border-t border-claude-border flex items-center justify-end">
                 {renderConnectivityTestButton(connectivityModalPlatform)}
               </div>
             </div>

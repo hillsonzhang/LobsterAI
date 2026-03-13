@@ -1,7 +1,9 @@
+import { startTransition } from 'react';
 import { store } from '../store';
 import {
   setSessions,
   setCurrentSession,
+  setCurrentSessionId,
   addSession,
   updateSessionStatus,
   deleteSession as deleteSessionAction,
@@ -95,7 +97,9 @@ class CoworkService {
 
     // Message update listener (for streaming content updates)
     const messageUpdateCleanup = cowork.onStreamMessageUpdate(({ sessionId, messageId, content }) => {
-      store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+      startTransition(() => {
+        store.dispatch(updateMessageContent({ sessionId, messageId, content }));
+      });
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
 
@@ -369,7 +373,8 @@ class CoworkService {
 
     const result = await cowork.getSession(sessionId);
     if (result.success && result.session) {
-      store.dispatch(setCurrentSession(result.session));
+      // 立即更新 sessionId，让 tab 高亮瞬间切换
+      store.dispatch(setCurrentSessionId(sessionId));
       store.dispatch(setStreaming(result.session.status === 'running'));
       // Restore persisted token usage into Redux
       if (result.session.lastInputTokens && result.session.lastInputTokens > 0) {
@@ -379,6 +384,10 @@ class CoworkService {
           outputTokens: result.session.lastOutputTokens ?? 0,
         }));
       }
+      // 内容渲染（含 KaTeX 公式编译）作为低优先级 transition，不阻塞 UI 交互
+      startTransition(() => {
+        store.dispatch(setCurrentSession(result.session));
+      });
       return result.session;
     }
 

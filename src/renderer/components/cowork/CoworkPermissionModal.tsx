@@ -187,23 +187,23 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
-      <div className="modal-content w-full max-w-lg mx-4 dark:bg-claude-darkSurface bg-claude-surface rounded-2xl shadow-modal overflow-hidden">
+      <div className="modal-content w-full max-w-lg mx-4 bg-claude-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-3 px-6 py-4 border-b dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-claude-border">
           <div className="p-2 rounded-full bg-yellow-100 dark:bg-yellow-900/30">
             <ExclamationTriangleIcon className="h-6 w-6 text-yellow-600 dark:text-yellow-500" />
           </div>
           <div className="flex-1">
-            <h2 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+            <h2 className="text-lg font-semibold text-claude-text">
               {i18nService.t('coworkPermissionRequired')}
             </h2>
-            <p className="text-sm dark:text-claude-darkTextSecondary text-claude-textSecondary">
+            <p className="text-sm text-claude-textSecondary">
               {i18nService.t('coworkPermissionDescription')}
             </p>
           </div>
           <button
             onClick={handleDeny}
-            className="p-2 rounded-lg dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors"
+            className="p-2 rounded-lg hover:bg-claude-surfaceHover text-claude-textSecondary transition-colors"
             aria-label="Close"
           >
             <XMarkIcon className="h-5 w-5" />
@@ -219,15 +219,15 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                 return (
                   <div
                     key={question.question}
-                    className="rounded-xl border dark:border-claude-darkBorder border-claude-border p-4 space-y-3"
+                    className="rounded-xl border border-claude-border p-4 space-y-3"
                   >
                     <div className="flex items-start gap-2">
                       {question.header && (
-                        <span className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-claude-surfaceHover dark:bg-claude-darkSurfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                        <span className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full bg-claude-surfaceHover text-claude-textSecondary">
                           {question.header}
                         </span>
                       )}
-                      <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                      <div className="text-sm font-medium text-claude-text">
                         {question.question}
                       </div>
                     </div>
@@ -241,8 +241,8 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
                             onClick={() => handleSelectOption(question, option.label)}
                             className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
                               isSelected
-                                ? 'border-claude-accent bg-claude-accent/10 text-claude-text dark:text-claude-darkText'
-                                : 'border-claude-border dark:border-claude-darkBorder dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover'
+                                ? 'border-claude-accent bg-claude-accent/10 text-claude-text'
+                                : 'border-claude-border text-claude-textSecondary hover:bg-claude-surfaceHover'
                             }`}
                           >
                             <div className="text-sm font-medium">{option.label}</div>
@@ -261,11 +261,11 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
             <>
               {/* Tool name */}
               <div>
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                <label className="block text-xs font-medium text-claude-textSecondary uppercase tracking-wider mb-1">
                   {i18nService.t('coworkToolName')}
                 </label>
-                <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg">
-                  <code className="text-sm dark:text-claude-darkText text-claude-text">
+                <div className="px-3 py-2 rounded-lg bg-claude-bg">
+                  <code className="text-sm text-claude-text">
                     {permission.toolName}
                   </code>
                 </div>
@@ -273,11 +273,11 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
 
               {/* Tool input */}
               <div>
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary uppercase tracking-wider mb-1">
+                <label className="block text-xs font-medium text-claude-textSecondary uppercase tracking-wider mb-1">
                   {i18nService.t('coworkToolInput')}
                 </label>
-                <div className="px-3 py-2 rounded-lg dark:bg-claude-darkBg bg-claude-bg max-h-48 overflow-y-auto">
-                  <pre className="text-xs dark:text-claude-darkText text-claude-text whitespace-pre-wrap break-words font-mono">
+                <div className="px-3 py-2 rounded-lg bg-claude-bg max-h-48 overflow-y-auto">
+                  <pre className="text-xs text-claude-text whitespace-pre-wrap break-words font-mono">
                     {formatToolInput(permission.toolInput)}
                   </pre>
                 </div>
@@ -297,10 +297,10 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t dark:border-claude-darkBorder border-claude-border">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-claude-border">
           <button
             onClick={handleDeny}
-            className="px-4 py-2 text-sm font-medium rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+            className="px-4 py-2 text-sm font-medium rounded-lg text-claude-textSecondary hover:bg-claude-surfaceHover transition-colors"
           >
             {denyButtonLabel}
           </button>
