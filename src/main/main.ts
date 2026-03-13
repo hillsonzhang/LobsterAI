@@ -1511,6 +1511,19 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:deleteBatch', async (_event, sessionIds: string[]) => {
+    try {
+      const coworkStoreInstance = getCoworkStore();
+      coworkStoreInstance.deleteSessions(sessionIds);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to batch delete sessions',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:pin', async (_event, options: { sessionId: string; pinned: boolean }) => {
     try {
       const coworkStoreInstance = getCoworkStore();
@@ -2158,6 +2171,22 @@ if (!gotTheLock) {
       return { success: true, path: null };
     }
     return { success: true, path: result.filePaths[0] };
+  });
+
+  ipcMain.handle('dialog:selectFiles', async (event, options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions = {
+      properties: ['openFile', 'multiSelections'] as ('openFile' | 'multiSelections')[],
+      title: options?.title,
+      filters: options?.filters,
+    };
+    const result = ownerWindow
+      ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: true, paths: [] };
+    }
+    return { success: true, paths: result.filePaths };
   });
 
   ipcMain.handle(
