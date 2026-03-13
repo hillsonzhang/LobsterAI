@@ -269,6 +269,10 @@ contextBridge.exposeInMainWorld('electron', {
     compactSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:compact', sessionId),
   },
+  screenshot: {
+    capture: (options?: { hideWindow?: boolean; cwd?: string }) =>
+      ipcRenderer.invoke('screenshot:capture', options),
+  },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
     selectFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) =>

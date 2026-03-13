@@ -7,6 +7,7 @@ import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import FolderSelectorPopover from './FolderSelectorPopover';
 import { SkillsButton, ActiveSkillBadge } from '../skills';
+import ScreenshotButton from './ScreenshotButton';
 import { i18nService } from '../../services/i18n';
 import { skillService } from '../../services/skill';
 import { RootState } from '../../store';
@@ -644,6 +645,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                 >
                   <PaperClipIcon className="h-4 w-4" />
                 </button>
+                {modelSupportsImage && (
+                  <ScreenshotButton
+                    onScreenshotCaptured={addAttachment}
+                    disabled={disabled || isStreaming}
+                    workingDirectory={workingDirectory}
+                  />
+                )}
                 <SkillsButton
                   onSelectSkill={handleSelectSkill}
                   onManageSkills={handleManageSkills}
@@ -700,6 +708,13 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               >
                 <PaperClipIcon className="h-4 w-4" />
               </button>
+              {modelSupportsImage && (
+                <ScreenshotButton
+                  onScreenshotCaptured={addAttachment}
+                  disabled={disabled || isStreaming}
+                  workingDirectory={workingDirectory}
+                />
+              )}
             </div>
 
             {isStreaming ? (

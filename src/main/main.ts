@@ -28,6 +28,7 @@ import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { startSidecar, stopSidecar, getSidecarStatus, restartSidecar } from './libs/ragSidecar';
 import * as ragService from './libs/ragService';
+import { captureScreenshot } from './libs/screenshotCapture';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -2300,6 +2301,14 @@ if (!gotTheLock) {
           error: error instanceof Error ? error.message : 'Failed to read file',
         };
       }
+    }
+  );
+
+  // Screenshot handler
+  ipcMain.handle(
+    'screenshot:capture',
+    async (_event, options?: { hideWindow?: boolean; cwd?: string }) => {
+      return captureScreenshot(mainWindow, options);
     }
   );
 

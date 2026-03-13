@@ -386,6 +386,15 @@ interface IElectronAPI {
     onStreamContextCompacted: (callback: (data: { sessionId: string; tokensBefore: number; tokensAfter: number; tokensFreed: number; mode: 'auto' | 'manual' }) => void) => () => void;
     compactSession: (sessionId: string) => Promise<{ success: boolean; tokensBefore?: number; tokensAfter?: number; tokensFreed?: number; error?: string }>;
   };
+  screenshot: {
+    capture: (options?: { hideWindow?: boolean; cwd?: string }) => Promise<{
+      success: boolean;
+      filePath?: string;
+      dataUrl?: string;
+      fileName?: string;
+      error?: string;
+    }>;
+  };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
     selectFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; path: string | null }>;
