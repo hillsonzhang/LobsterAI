@@ -242,10 +242,57 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
     : resolvedApiKey;
 
   if (matched.apiFormat === 'anthropic') {
+    // Official Anthropic provider: connect directly (supports all block types).
+    if (matched.providerName === 'anthropic') {
+      return {
+        config: {
+          apiKey: effectiveApiKey,
+          baseURL: resolvedBaseURL,
+          model: matched.modelId,
+          apiType: 'anthropic',
+        },
+      };
+    }
+
+    // Third-party Anthropic-compatible providers may not support all content block
+    // types (e.g. `document`). Route through the local proxy to sanitize requests.
+    const proxyStatus = getCoworkOpenAICompatProxyStatus();
+    if (!proxyStatus.running) {
+      // Proxy not running — fall back to direct connection.
+      return {
+        config: {
+          apiKey: effectiveApiKey,
+          baseURL: resolvedBaseURL,
+          model: matched.modelId,
+          apiType: 'anthropic',
+        },
+      };
+    }
+
+    configureCoworkOpenAICompatProxy({
+      baseURL: resolvedBaseURL,
+      apiKey: effectiveApiKey || undefined,
+      model: matched.modelId,
+      provider: matched.providerName,
+      apiFormat: 'anthropic',
+    });
+
+    const proxyBaseURL = getCoworkOpenAICompatProxyBaseURL(target);
+    if (!proxyBaseURL) {
+      return {
+        config: {
+          apiKey: effectiveApiKey,
+          baseURL: resolvedBaseURL,
+          model: matched.modelId,
+          apiType: 'anthropic',
+        },
+      };
+    }
+
     return {
       config: {
-        apiKey: effectiveApiKey,
-        baseURL: resolvedBaseURL,
+        apiKey: effectiveApiKey || 'lobsterai-anthropic-passthrough',
+        baseURL: proxyBaseURL,
         model: matched.modelId,
         apiType: 'anthropic',
       },

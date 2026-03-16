@@ -386,7 +386,7 @@ class CoworkService {
       }
       // 内容渲染（含 KaTeX 公式编译）作为低优先级 transition，不阻塞 UI 交互
       startTransition(() => {
-        store.dispatch(setCurrentSession(result.session));
+        store.dispatch(setCurrentSession(result.session ?? null));
       });
       return result.session;
     }

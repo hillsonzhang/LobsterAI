@@ -16,6 +16,7 @@ export type OpenAICompatUpstreamConfig = {
   apiKey?: string;
   model: string;
   provider?: string;
+  apiFormat?: 'openai' | 'anthropic';
 };
 
 export type OpenAICompatProxyTarget = 'local' | 'sandbox';
@@ -46,7 +47,7 @@ type StreamState = {
   toolCalls: Record<number, ToolCallState>;
 };
 
-type UpstreamAPIType = 'chat_completions' | 'responses';
+type UpstreamAPIType = 'chat_completions' | 'responses' | 'anthropic_passthrough';
 
 type ResponsesFunctionCallState = {
   outputIndex: number;
@@ -345,8 +346,34 @@ function estimateAnthropicCountTokensRequestInputTokens(requestBody: unknown): n
   return Math.max(1, estimated);
 }
 
-function resolveUpstreamAPIType(provider?: string): UpstreamAPIType {
+function resolveUpstreamAPIType(provider?: string, apiFormat?: string): UpstreamAPIType {
+  if (apiFormat === 'anthropic') return 'anthropic_passthrough';
   return provider?.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
+}
+
+/**
+ * Strip content block types not supported by third-party Anthropic-compatible APIs.
+ * The official Anthropic API supports `document`, `image`, etc., but many third-party
+ * providers only support `text`, `tool_use`, `tool_result`, `thinking`, and `image`.
+ */
+function sanitizeAnthropicRequestBody(body: Record<string, unknown>): void {
+  const SUPPORTED_BLOCK_TYPES = new Set(['text', 'tool_use', 'tool_result', 'thinking', 'image']);
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return;
+
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue;
+    const msg = message as Record<string, unknown>;
+    const content = msg.content;
+    if (!Array.isArray(content)) continue;
+
+    msg.content = content.filter((block: unknown) => {
+      if (!block || typeof block !== 'object') return true;
+      const blockType = (block as Record<string, unknown>).type;
+      if (typeof blockType !== 'string') return true;
+      return SUPPORTED_BLOCK_TYPES.has(blockType);
+    });
+  }
 }
 
 function buildOpenAIResponsesURL(baseURL: string): string {
@@ -2614,7 +2641,67 @@ async function handleRequest(
     return;
   }
 
-  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider);
+  const upstreamAPIType = resolveUpstreamAPIType(upstreamConfig.provider, upstreamConfig.apiFormat);
+
+  // Anthropic passthrough: sanitize and forward as-is in Anthropic format.
+  if (upstreamAPIType === 'anthropic_passthrough') {
+    const anthropicBody = parsedRequestBody as Record<string, unknown>;
+    if (upstreamConfig.model) {
+      anthropicBody.model = upstreamConfig.model;
+    }
+    sanitizeAnthropicRequestBody(anthropicBody);
+
+    const targetURL = upstreamConfig.baseURL.replace(/\/+$/, '') + '/v1/messages';
+    const passthroughHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    };
+    if (upstreamConfig.apiKey) {
+      passthroughHeaders['x-api-key'] = upstreamConfig.apiKey;
+    }
+
+    const stream = Boolean(anthropicBody.stream);
+    console.log(`[CoworkProxy] Anthropic passthrough: model=${anthropicBody.model}, stream=${stream}, url=${targetURL}`);
+
+    let upstreamResponse: Response;
+    try {
+      upstreamResponse = await session.defaultSession.fetch(targetURL, {
+        method: 'POST',
+        headers: passthroughHeaders,
+        body: JSON.stringify(anthropicBody),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Network error';
+      lastProxyError = message;
+      writeJSON(res, 502, createAnthropicErrorBody(message));
+      return;
+    }
+
+    res.writeHead(upstreamResponse.status, {
+      'Content-Type': upstreamResponse.headers.get('Content-Type') || 'application/json',
+    });
+
+    if (!upstreamResponse.body) {
+      const text = await upstreamResponse.text();
+      res.end(text);
+      return;
+    }
+
+    const reader = upstreamResponse.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(Buffer.from(value));
+      }
+    } catch (error) {
+      console.error('[CoworkProxy] Anthropic passthrough stream error:', error instanceof Error ? error.message : error);
+    } finally {
+      res.end();
+    }
+    return;
+  }
+
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
