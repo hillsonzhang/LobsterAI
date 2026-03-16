@@ -28,6 +28,7 @@ import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { startSidecar, stopSidecar, getSidecarStatus, restartSidecar } from './libs/ragSidecar';
 import * as ragService from './libs/ragService';
+import { captureScreenshot } from './libs/screenshotCapture';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -641,6 +642,18 @@ const getCoworkRunner = () => {
           win.webContents.send('cowork:stream:error', { sessionId, error });
         }
       });
+    });
+
+    coworkRunner.on('tokenUsage', (sessionId: string, usage: { inputTokens: number; outputTokens: number }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('cowork:stream:tokenUsage', { sessionId, ...usage });
+      }
+    });
+
+    coworkRunner.on('contextCompacted', (sessionId: string, info: { tokensBefore: number; tokensAfter: number; tokensFreed: number; mode: 'auto' | 'manual' }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('cowork:stream:contextCompacted', { sessionId, ...info });
+      }
     });
   }
   return coworkRunner;
@@ -1498,6 +1511,19 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('cowork:session:compact', async (_event, sessionId: string) => {
+    try {
+      const runner = getCoworkRunner();
+      const result = await runner.compactSession(sessionId, 'manual');
+      return { success: true, ...result };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to compact session',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:session:delete', async (_event, sessionId: string) => {
     try {
       const coworkStoreInstance = getCoworkStore();
@@ -2275,6 +2301,14 @@ if (!gotTheLock) {
           error: error instanceof Error ? error.message : 'Failed to read file',
         };
       }
+    }
+  );
+
+  // Screenshot handler
+  ipcMain.handle(
+    'screenshot:capture',
+    async (_event, options?: { hideWindow?: boolean; cwd?: string }) => {
+      return captureScreenshot(mainWindow, options);
     }
   );
 

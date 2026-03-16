@@ -390,6 +390,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkStartingSession: '正在启动会话...',
     coworkPreparingEnvironment: '准备环境中，请稍候',
     coworkAddFile: '添加文件',
+    coworkScreenshot: '截图',
+    coworkScreenshotHideWindow: '隐藏当前窗口截图',
     coworkDropFileHint: '拖拽文件到此处，或直接粘贴文件',
     coworkAddImage: '添加图片',
     coworkInputFileLabel: '输入文件',
@@ -843,6 +845,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksDetailNotify: '通知',
     scheduledTasksToggleWarningAtPast: '该任务的执行时间已过，启用后将不会运行',
     scheduledTasksToggleWarningExpired: '该任务已过期，启用后将不会运行',
+
+    // Context compression
+    contextUsage: '上下文已使用',
+    contextRemaining: '上下文剩余至自动压缩',
+    clickToCompact: '点击立即压缩',
+    compacting: '压缩中...',
+    contextCompactedSummary: '上下文已压缩，以下为摘要',
   },
   en: {
     // Common
@@ -1229,6 +1238,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkStartingSession: 'Starting session...',
     coworkPreparingEnvironment: 'Preparing environment, please wait',
     coworkAddFile: 'Add File',
+    coworkScreenshot: 'Screenshot',
+    coworkScreenshotHideWindow: 'Hide window and screenshot',
     coworkDropFileHint: 'Drop files here, or paste files directly',
     coworkAddImage: 'Add Image',
     coworkInputFileLabel: 'Input file',
@@ -1682,6 +1693,13 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksDetailNotify: 'Notification',
     scheduledTasksToggleWarningAtPast: 'The execution time of this task has passed. It will not run after enabling',
     scheduledTasksToggleWarningExpired: 'This task has expired. It will not run after enabling',
+
+    // Context compression
+    contextUsage: 'context used',
+    contextRemaining: 'of context remaining until auto-compact',
+    clickToCompact: 'Click to compact now',
+    compacting: 'Compacting...',
+    contextCompactedSummary: 'Context compacted, summary below',
   }
 };
 

@@ -81,21 +81,21 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border shrink-0">
+      <div className="draggable flex h-12 items-center justify-between px-4 border-b border-claude-border shrink-0">
         <div className="flex items-center space-x-3 h-8">
           {isSidebarCollapsed && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-claude-textSecondary hover:bg-claude-surfaceHover transition-colors"
               >
                 <SidebarToggleIcon className="h-4 w-4" isCollapsed={true} />
               </button>
               <button
                 type="button"
                 onClick={onNewChat}
-                className="h-8 w-8 inline-flex items-center justify-center rounded-lg dark:text-claude-darkTextSecondary text-claude-textSecondary hover:bg-claude-surfaceHover dark:hover:bg-claude-darkSurfaceHover transition-colors"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-claude-textSecondary hover:bg-claude-surfaceHover transition-colors"
               >
                 <ComposeIcon className="h-4 w-4" />
               </button>
@@ -105,13 +105,13 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           {viewMode !== 'list' && (
             <button
               onClick={handleBackToList}
-              className="non-draggable p-2 rounded-lg dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover dark:text-claude-darkTextSecondary text-claude-textSecondary transition-colors"
+              className="non-draggable p-2 rounded-lg hover:bg-claude-surfaceHover text-claude-textSecondary transition-colors"
               aria-label={i18nService.t('back')}
             >
               <ArrowLeftIcon className="h-5 w-5" />
             </button>
           )}
-          <h1 className="text-lg font-semibold dark:text-claude-darkText text-claude-text">
+          <h1 className="text-lg font-semibold text-claude-text">
             {i18nService.t('scheduledTasksTitle')}
           </h1>
         </div>
@@ -120,15 +120,15 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
 
       {/* Tabs + New Task button */}
       {showTabs && (
-        <div className="flex items-center justify-between border-b dark:border-claude-darkBorder border-claude-border px-4 shrink-0">
+        <div className="flex items-center justify-between border-b border-claude-border px-4 shrink-0">
           <div className="flex">
             <button
               type="button"
               onClick={() => handleTabChange('tasks')}
               className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
                 activeTab === 'tasks'
-                  ? 'dark:text-claude-darkText text-claude-text'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                  ? 'text-claude-text'
+                  : 'text-claude-textSecondary hover:hover:text-claude-text'
               }`}
             >
               {i18nService.t('scheduledTasksTabTasks')}
@@ -141,8 +141,8 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
               onClick={() => handleTabChange('history')}
               className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
                 activeTab === 'history'
-                  ? 'dark:text-claude-darkText text-claude-text'
-                  : 'dark:text-claude-darkTextSecondary text-claude-textSecondary hover:dark:text-claude-darkText hover:text-claude-text'
+                  ? 'text-claude-text'
+                  : 'text-claude-textSecondary hover:hover:text-claude-text'
               }`}
             >
               {i18nService.t('scheduledTasksTabHistory')}
