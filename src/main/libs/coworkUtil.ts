@@ -7,6 +7,7 @@ import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
+import { appendMsetRuntimeToEnv } from './msetRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 import { getSidecarStatus, getPortFile } from './ragSidecar';
 
@@ -1072,6 +1073,7 @@ function applyPackagedEnvOverrides(env: Record<string, string | undefined>): voi
     }
 
     appendPythonRuntimeToEnv(env);
+    appendMsetRuntimeToEnv(env);
 
     // Tell git-bash to inherit the PATH from the parent process instead of
     // rebuilding it from scratch. Without this, git-bash's /etc/profile (login

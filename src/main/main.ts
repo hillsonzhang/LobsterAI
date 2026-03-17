@@ -26,6 +26,7 @@ import { initLogger, getLogFilePath } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
+import { ensureMsetRuntimeReady } from './libs/msetRuntime';
 import { startSidecar, stopSidecar, getSidecarStatus, restartSidecar } from './libs/ragSidecar';
 import * as ragService from './libs/ragService';
 import { captureScreenshot } from './libs/screenshotCapture';
@@ -2936,6 +2937,17 @@ if (!gotTheLock) {
       }
     } catch (error) {
       console.error('[Main] initApp: ensurePythonRuntimeReady threw:', error);
+    }
+
+    try {
+      const msetResult = ensureMsetRuntimeReady();
+      if (!msetResult.success) {
+        console.error('[Main] initApp: ensureMsetRuntimeReady failed:', msetResult.error);
+      } else {
+        console.log('[Main] initApp: ensureMsetRuntimeReady done, msetHome:', msetResult.msetHome);
+      }
+    } catch (error) {
+      console.error('[Main] initApp: ensureMsetRuntimeReady threw:', error);
     }
 
     try {

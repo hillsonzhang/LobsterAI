@@ -3388,6 +3388,121 @@ export class CoworkRunner extends EventEmitter {
           tools: memoryTools,
         }),
       };
+
+      // Inject Codex-powered web search MCP tools (replaces disabled WebSearch/WebFetch)
+      // Build Codex CLI config args from environment variables:
+      //   CODEX_BASE_URL  → model_providers.lobsterai.base_url
+      //   CODEX_MODEL     → model
+      //   CODEX_ENV_KEY   → model_providers.lobsterai.env_key (default: CRS_OAI_KEY)
+      const codexBaseUrl = envVars.CODEX_BASE_URL || '';
+      const codexModel = envVars.CODEX_MODEL || '';
+      const codexEnvKey = envVars.CODEX_ENV_KEY || 'CRS_OAI_KEY';
+      const codexConfigArgs: string[] = [];
+      if (codexBaseUrl) {
+        codexConfigArgs.push(
+          '-c', 'model_provider="lobsterai"',
+          '-c', `model_providers.lobsterai.base_url="${codexBaseUrl}"`,
+          '-c', 'model_providers.lobsterai.wire_api="responses"',
+          '-c', 'model_providers.lobsterai.requires_openai_auth=true',
+          '-c', `model_providers.lobsterai.env_key="${codexEnvKey}"`,
+        );
+        if (codexModel) {
+          codexConfigArgs.push('-c', `model="${codexModel}"`);
+        }
+        coworkLog('INFO', 'codex-search', `Codex config: base_url=${codexBaseUrl}, model=${codexModel || '(default)'}, env_key=${codexEnvKey}`);
+      } else {
+        coworkLog('INFO', 'codex-search', 'Codex config: using ~/.codex/config.toml defaults');
+      }
+
+      const runCodexExec = async (prompt: string, label: string): Promise<{ output: string; error?: string }> => {
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+
+        const args = [
+          '@openai/codex', 'exec',
+          '--search',
+          '--ephemeral',
+          ...codexConfigArgs,
+          '-o', '-',
+          prompt,
+        ];
+
+        try {
+          const { stdout, stderr } = await execFileAsync('npx', args, {
+            timeout: 60_000,
+            env: envVars,
+            cwd,
+            windowsHide: true,
+            shell: true,
+          });
+          const output = (stdout || '').trim();
+          if (!output) {
+            const stderrSnippet = (stderr || '').slice(0, 300);
+            coworkLog('WARN', 'codex-search', `${label} returned empty, stderr: ${stderrSnippet}`);
+          }
+          return { output: output || 'No results found.' };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return { output: '', error: msg };
+        }
+      };
+
+      const codexSearchTools: any[] = [
+        tool(
+          'WebSearch',
+          'Search the web for current information using Codex. Use this when you need real-time data, latest documentation, recent news, or any information beyond your knowledge cutoff.',
+          {
+            query: z.string().min(1).describe('The search query'),
+            max_results: z.number().int().min(1).max(10).optional().describe('Maximum number of results to return (default 5)'),
+          },
+          async (args: { query: string; max_results?: number }) => {
+            const n = args.max_results || 5;
+            coworkLog('INFO', 'codex-search', `WebSearch: "${args.query}" (max ${n})`);
+            const { output, error } = await runCodexExec(
+              `Search the web for: "${args.query}". Return the top ${n} results. For each result provide: title, URL, and a brief summary. Format as a numbered list.`,
+              'WebSearch'
+            );
+            if (error) {
+              coworkLog('ERROR', 'codex-search', `WebSearch failed: ${error}`);
+              return { content: [{ type: 'text', text: `Web search failed: ${error}` }], isError: true } as any;
+            }
+            coworkLog('INFO', 'codex-search', `WebSearch returned ${output.length} chars`);
+            return { content: [{ type: 'text', text: output }] } as any;
+          }
+        ),
+        tool(
+          'WebFetch',
+          'Fetch and read the content of a specific web page URL using Codex.',
+          {
+            url: z.string().min(1).describe('The URL to fetch and read'),
+          },
+          async (args: { url: string }) => {
+            coworkLog('INFO', 'codex-search', `WebFetch: "${args.url}"`);
+            const { output, error } = await runCodexExec(
+              `Fetch the content of this URL and return the main text content in a readable format: ${args.url}`,
+              'WebFetch'
+            );
+            if (error) {
+              coworkLog('ERROR', 'codex-search', `WebFetch failed: ${error}`);
+              return { content: [{ type: 'text', text: `Web fetch failed: ${error}` }], isError: true } as any;
+            }
+            coworkLog('INFO', 'codex-search', `WebFetch returned ${output.length} chars`);
+            return { content: [{ type: 'text', text: output }] } as any;
+          }
+        ),
+      ];
+
+      const codexSearchServerName = `codex-search-${sessionId.slice(0, 8)}`;
+      options.mcpServers = {
+        ...(options.mcpServers as Record<string, unknown>),
+        [codexSearchServerName]: createSdkMcpServer({
+          name: codexSearchServerName,
+          tools: codexSearchTools,
+        }),
+      };
+      coworkLog('INFO', 'runClaudeCodeLocal', `Registered Codex search MCP: ${codexSearchServerName}`);
+
       let userMcpServerCount = 0;
 
       // Inject user-configured MCP servers (local mode only)

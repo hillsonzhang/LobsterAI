@@ -80,6 +80,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/mset",
+        "to": "mset",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   },

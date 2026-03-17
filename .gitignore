@@ -24,6 +24,7 @@ resources/MinGit-*.zip
 resources/PortableGit-*.7z.exe
 resources/python-win/
 resources/python-*.zip
+resources/mset/
 
 # SKILLs runtime files
 SKILLs/**/.connection
