@@ -955,6 +955,103 @@ if (!gotTheLock) {
     getStore().delete(key);
   });
 
+  // Custom environment variables management
+  const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const PROTECTED_ENV_KEYS = new Set([
+    'PATH', 'HOME', 'USERPROFILE', 'TMPDIR', 'TMP', 'TEMP',
+    'SKILLS_ROOT', 'LOBSTERAI_SKILLS_ROOT', 'LOBSTERAI_ELECTRON_PATH',
+    'LOBSTERAI_API_BASE_URL', 'LOBSTERAI_NPM_BIN_DIR',
+    'ELECTRON_RUN_AS_NODE', 'NODE_PATH',
+    'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL',
+  ]);
+
+  ipcMain.handle('env:get', () => {
+    return getStore().get<Record<string, string>>('custom_env_vars') ?? {};
+  });
+
+  ipcMain.handle('env:set', (_event, envVars: Record<string, string>) => {
+    try {
+      const sanitized: Record<string, string> = {};
+      if (envVars && typeof envVars === 'object') {
+        for (const [key, value] of Object.entries(envVars)) {
+          if (!ENV_KEY_RE.test(key)) continue;
+          if (PROTECTED_ENV_KEYS.has(key)) continue;
+          if (typeof value !== 'string') continue;
+          sanitized[key] = value;
+        }
+      }
+      getStore().set('custom_env_vars', sanitized);
+      return { success: true, count: Object.keys(sanitized).length };
+    } catch (error) {
+      console.error('[env:set] Failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('config:import', async () => {
+    const ownerWindow = BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(ownerWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return { success: false, canceled: true };
+    }
+
+    try {
+      const content = fs.readFileSync(result.filePaths[0], 'utf8');
+      const data = JSON.parse(content);
+      const importResult = { env: 0, providers: 0, errors: [] as string[] };
+
+      if (data.env && typeof data.env === 'object') {
+        const existing = getStore().get<Record<string, string>>('custom_env_vars') || {};
+        const merged = { ...existing };
+        for (const [key, value] of Object.entries(data.env)) {
+          if (!ENV_KEY_RE.test(key)) { importResult.errors.push(`Invalid key: ${key}`); continue; }
+          if (PROTECTED_ENV_KEYS.has(key)) { importResult.errors.push(`Protected key: ${key}`); continue; }
+          if (typeof value !== 'string') { importResult.errors.push(`Non-string value: ${key}`); continue; }
+          merged[key] = value;
+          importResult.env++;
+        }
+        getStore().set('custom_env_vars', merged);
+      }
+
+      if (data.providers && typeof data.providers === 'object') {
+        const appConfig = getStore().get<Record<string, unknown>>('app_config') || {};
+        const existingProviders = (appConfig.providers || {}) as Record<string, unknown>;
+        for (const [name, config] of Object.entries(data.providers)) {
+          if (config && typeof config === 'object') {
+            existingProviders[name] = {
+              ...(existingProviders[name] && typeof existingProviders[name] === 'object' ? existingProviders[name] : {}),
+              ...(config as Record<string, unknown>),
+            };
+            importResult.providers++;
+          }
+        }
+        appConfig.providers = existingProviders;
+        getStore().set('app_config', appConfig);
+      }
+
+      return { success: true, ...importResult };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Invalid JSON file' };
+    }
+  });
+
+  ipcMain.handle('config:export', async () => {
+    const ownerWindow = BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showSaveDialog(ownerWindow, {
+      defaultPath: 'lobsterai-env.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) {
+      return { success: false, canceled: true };
+    }
+    const envVars = getStore().get<Record<string, string>>('custom_env_vars') || {};
+    fs.writeFileSync(result.filePath, JSON.stringify({ env: envVars }, null, 2), 'utf8');
+    return { success: true, filePath: result.filePath };
+  });
+
   // Network status change handler
   // Remove any existing listener first to avoid duplicate registrations
   ipcMain.removeAllListeners('network:status-change');

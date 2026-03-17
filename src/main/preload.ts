@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('electron', {
     set: (key: string, value: any) => ipcRenderer.invoke('store:set', key, value),
     remove: (key: string) => ipcRenderer.invoke('store:remove', key),
   },
+  envConfig: {
+    get: () => ipcRenderer.invoke('env:get') as Promise<Record<string, string>>,
+    set: (envVars: Record<string, string>) => ipcRenderer.invoke('env:set', envVars) as Promise<{ success: boolean; count: number }>,
+    import: () => ipcRenderer.invoke('config:import') as Promise<{ success: boolean; canceled?: boolean; error?: string; env?: number; providers?: number; errors?: string[] }>,
+    export: () => ipcRenderer.invoke('config:export') as Promise<{ success: boolean; canceled?: boolean; filePath?: string }>,
+  },
   skills: {
     list: () => ipcRenderer.invoke('skills:list'),
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('skills:setEnabled', options),

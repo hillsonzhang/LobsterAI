@@ -47,7 +47,7 @@ import {
   CustomProviderIcon,
 } from './icons/providers';
 
-type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'about';
+type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'envVars' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -392,7 +392,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
 
   const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled);
-  
+
+  // Environment variables state
+  const [customEnvVars, setCustomEnvVars] = useState<Record<string, string>>({});
+  const [newEnvKey, setNewEnvKey] = useState('');
+  const [newEnvValue, setNewEnvValue] = useState('');
+  const [revealedEnvKeys, setRevealedEnvKeys] = useState<Set<string>>(new Set());
+  const envKeyRegex = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -1235,6 +1242,64 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setActiveTab(tab);
   };
 
+  // Environment variables handlers
+  const loadEnvVars = useCallback(async () => {
+    try {
+      const vars = await window.electron.envConfig.get();
+      setCustomEnvVars(vars);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'envVars') loadEnvVars();
+  }, [activeTab, loadEnvVars]);
+
+  const handleEnvVarSave = useCallback(async (vars: Record<string, string>) => {
+    try {
+      const result = await window.electron.envConfig.set(vars);
+      if (result && !result.success) {
+        setError(`Failed to save: ${(result as any).error || 'unknown'}`);
+        return;
+      }
+      setCustomEnvVars(vars);
+    } catch (err) {
+      setError(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
+  const handleEnvVarAdd = useCallback(() => {
+    const key = newEnvKey.trim();
+    if (!key || !envKeyRegex.test(key) || !newEnvValue) return;
+    handleEnvVarSave({ ...customEnvVars, [key]: newEnvValue });
+    setNewEnvKey('');
+    setNewEnvValue('');
+  }, [newEnvKey, newEnvValue, customEnvVars, handleEnvVarSave]);
+
+  const handleEnvVarDelete = useCallback((key: string) => {
+    const updated = { ...customEnvVars };
+    delete updated[key];
+    handleEnvVarSave(updated);
+    setRevealedEnvKeys(prev => { const next = new Set(prev); next.delete(key); return next; });
+  }, [customEnvVars, handleEnvVarSave]);
+
+  const handleEnvConfigImport = useCallback(async () => {
+    try {
+      const result = await window.electron.envConfig.import();
+      if (result.canceled) return;
+      if (!result.success) { setError(result.error || i18nService.t('envVarsImportFailed')); return; }
+      await loadEnvVars();
+      setNoticeMessage(i18nService.t('envVarsImportSuccess').replace('{env}', String(result.env || 0)).replace('{providers}', String(result.providers || 0)));
+    } catch { setError(i18nService.t('envVarsImportFailed')); }
+  }, [loadEnvVars]);
+
+  const handleEnvConfigExport = useCallback(async () => {
+    try { await window.electron.envConfig.export(); } catch { setError('Failed to export'); }
+  }, []);
+
+  const toggleRevealEnvKey = useCallback((key: string) => {
+    setRevealedEnvKeys(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  }, []);
+
   // 快捷键更新处理
   const handleShortcutChange = (key: keyof typeof shortcuts, value: string) => {
     setShortcuts(prev => ({
@@ -1809,6 +1874,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     { key: 'email',          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
     { key: 'coworkSandbox',  label: i18nService.t('coworkSandbox'),  icon: <ShieldCheckIcon className="h-5 w-5" /> },
+    { key: 'envVars',         label: i18nService.t('envVars'),         icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" /></svg> },
     { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
     { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
   ], [language]);
@@ -2811,6 +2877,63 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
       case 'im':
         return <IMSettings />;
+
+      case 'envVars':
+        return (
+          <div className="space-y-6">
+            <div>
+              <p className="text-xs text-claude-textSecondary mb-4">{i18nService.t('envVarsDesc')}</p>
+              <div className="flex gap-2">
+                <button type="button" onClick={handleEnvConfigImport} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors">{i18nService.t('envVarsImport')}</button>
+                <button type="button" onClick={handleEnvConfigExport} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-claude-border text-claude-textSecondary hover:text-claude-text hover:bg-claude-surfaceHover transition-colors">{i18nService.t('envVarsExport')}</button>
+              </div>
+            </div>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <label className="block text-xs text-claude-textSecondary mb-1">{i18nService.t('envVarsKey')}</label>
+                <input type="text" value={newEnvKey} onChange={e => setNewEnvKey(e.target.value.replace(/[^A-Za-z0-9_]/g, ''))} placeholder="MY_API_KEY" className={`w-full px-3 py-1.5 text-sm rounded-lg border bg-claude-input text-claude-text placeholder:text-claude-textTertiary focus:outline-none focus:ring-1 focus:ring-claude-accent ${newEnvKey && !envKeyRegex.test(newEnvKey) ? 'border-red-400' : 'border-claude-border'}`} />
+              </div>
+              <div className="flex-[2]">
+                <label className="block text-xs text-claude-textSecondary mb-1">{i18nService.t('envVarsValue')}</label>
+                <input type="password" value={newEnvValue} onChange={e => setNewEnvValue(e.target.value)} placeholder="sk-..." className="w-full px-3 py-1.5 text-sm rounded-lg border border-claude-border bg-claude-input text-claude-text placeholder:text-claude-textTertiary focus:outline-none focus:ring-1 focus:ring-claude-accent" />
+              </div>
+              <button type="button" onClick={handleEnvVarAdd} disabled={!newEnvKey || !newEnvValue || !envKeyRegex.test(newEnvKey)} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">{i18nService.t('envVarsAdd')}</button>
+            </div>
+            {Object.keys(customEnvVars).length === 0 ? (
+              <p className="text-sm text-claude-textTertiary text-center py-8">{i18nService.t('envVarsEmpty')}</p>
+            ) : (
+              <div className="border border-claude-border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-claude-surfaceMuted border-b border-claude-border">
+                      <th className="text-left px-3 py-2 text-xs font-medium text-claude-textSecondary">{i18nService.t('envVarsKey')}</th>
+                      <th className="text-left px-3 py-2 text-xs font-medium text-claude-textSecondary">{i18nService.t('envVarsValue')}</th>
+                      <th className="w-20"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(customEnvVars).map(([key, value]) => (
+                      <tr key={key} className="border-b border-claude-border last:border-b-0 hover:bg-claude-surfaceHover">
+                        <td className="px-3 py-2 font-mono text-xs text-claude-text">{key}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-claude-textSecondary">{revealedEnvKeys.has(key) ? value : '\u2022'.repeat(Math.min(value.length, 24))}</td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button type="button" onClick={() => toggleRevealEnvKey(key)} className="p-1 text-claude-textTertiary hover:text-claude-text rounded transition-colors" title={revealedEnvKeys.has(key) ? 'Hide' : 'Show'}>
+                              {revealedEnvKeys.has(key) ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
+                            </button>
+                            <button type="button" onClick={() => handleEnvVarDelete(key)} className="p-1 text-claude-textTertiary hover:text-red-500 rounded transition-colors" title="Delete">
+                              <XMarkIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
 
       case 'about':
         return (

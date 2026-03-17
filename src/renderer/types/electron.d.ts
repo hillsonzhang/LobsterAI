@@ -251,6 +251,12 @@ interface IElectronAPI {
     set: (key: string, value: any) => Promise<void>;
     remove: (key: string) => Promise<void>;
   };
+  envConfig: {
+    get: () => Promise<Record<string, string>>;
+    set: (envVars: Record<string, string>) => Promise<{ success: boolean; count: number }>;
+    import: () => Promise<{ success: boolean; canceled?: boolean; error?: string; env?: number; providers?: number; errors?: string[] }>;
+    export: () => Promise<{ success: boolean; canceled?: boolean; filePath?: string }>;
+  };
   skills: {
     list: () => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;
     setEnabled: (options: { id: string; enabled: boolean }) => Promise<{ success: boolean; skills?: Skill[]; error?: string }>;

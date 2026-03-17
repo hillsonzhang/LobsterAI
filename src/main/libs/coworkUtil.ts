@@ -2,7 +2,7 @@ import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, chmodSync, statSync, readdirSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
-import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig } from './claudeSettings';
+import { buildEnvForConfig, getCurrentApiConfig, resolveCurrentApiConfig, getStore as getClaudeSettingsStore } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
@@ -1311,6 +1311,23 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
     : { ...process.env };
 
   applyPackagedEnvOverrides(env);
+
+  // Inject user-defined custom environment variables from Settings.
+  try {
+    const store = getClaudeSettingsStore();
+    if (store) {
+      const customEnv = store.get<Record<string, string>>('custom_env_vars');
+      if (customEnv && typeof customEnv === 'object') {
+        for (const [key, value] of Object.entries(customEnv)) {
+          if (typeof value === 'string') {
+            env[key] = value;
+          }
+        }
+      }
+    }
+  } catch {
+    // Store not ready yet
+  }
 
   // Inject SKILLs directory path for skill scripts.
   // On Windows, normalise backslashes to forward slashes so the value is usable

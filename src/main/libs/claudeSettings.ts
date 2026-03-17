@@ -54,7 +54,7 @@ export function setStoreGetter(getter: () => SqliteStore | null): void {
   storeGetter = getter;
 }
 
-const getStore = (): SqliteStore | null => {
+export const getStore = (): SqliteStore | null => {
   if (!storeGetter) {
     return null;
   }
