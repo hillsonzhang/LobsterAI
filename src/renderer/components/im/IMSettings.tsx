@@ -9,22 +9,51 @@ import { SignalIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangl
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import { RootState } from '../../store';
 import { imService } from '../../services/im';
-import { setDingTalkConfig, setFeishuConfig, setQQConfig, setTelegramConfig, setDiscordConfig, setNimConfig, setXiaomifengConfig, setWecomConfig, clearError } from '../../store/slices/imSlice';
+import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setNeteaseBeeChanConfig, setWecomConfig, setWeixinConfig, setPopoConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
-import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig } from '../../types/im';
+import type { IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, FeishuOpenClawConfig, DingTalkOpenClawConfig, QQOpenClawConfig, WecomOpenClawConfig, PopoOpenClawConfig } from '../../types/im';
+import { PlatformRegistry } from '@shared/platform';
+import type { Platform } from '@shared/platform';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
+import WecomAIBotSDK from '@wecom/wecom-aibot-sdk';
+import { QRCodeSVG } from 'qrcode.react';
+import { ArrowPathIcon } from '@heroicons/react/24/outline';
+import { SchemaForm } from './SchemaForm';
+import type { UiHint } from './SchemaForm';
 
-// Platform metadata
-const platformMeta: Record<IMPlatform, { label: string; logo: string }> = {
-  dingtalk: { label: '钉钉', logo: 'dingding.png' },
-  feishu: { label: '飞书', logo: 'feishu.png' },
-  qq: { label: 'QQ', logo: 'qq_bot.jpeg' },
-  telegram: { label: 'Telegram', logo: 'telegram.svg' },
-  discord: { label: 'Discord', logo: 'discord.svg' },
-  nim: { label: '云信', logo: 'nim.png' },
-  xiaomifeng: { label: '小蜜蜂', logo: 'xiaomifeng.png' },
-  wecom: { label: '企业微信', logo: 'wecom.png' },
-};
+
+
+// Reusable guide card component for platform setup instructions
+const PlatformGuide: React.FC<{
+  title?: string;
+  steps: string[];
+  guideUrl?: string;
+  guideLabel?: string;
+}> = ({ title, steps, guideUrl, guideLabel }) => (
+  <div className="mb-3 p-3 rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60">
+    {title && (
+      <p className="text-xs text-claude-text dark:text-claude-darkText leading-relaxed mb-1.5 font-medium">{title}</p>
+    )}
+    <ol className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary space-y-1 list-decimal list-inside">
+      {steps.map((step, i) => (
+        <li key={i}>{step}</li>
+      ))}
+    </ol>
+    {guideUrl && (
+      <button
+        type="button"
+        onClick={() => {
+          window.electron.shell.openExternal(guideUrl).catch((err: unknown) => {
+            console.error('[IM] Failed to open guide URL:', err);
+          });
+        }}
+        className="mt-2 text-xs font-medium text-claude-accentLight dark:text-claude-accentLight hover:text-claude-accent dark:hover:text-blue-200 underline underline-offset-2 transition-colors"
+      >
+        {guideLabel || i18nService.t('imViewGuide')}
+      </button>
+    )}
+  </div>
+);
 
 const verdictColorClass: Record<IMConnectivityTestResult['verdict'], string> = {
   pass: 'bg-green-500/15 text-green-600 dark:text-green-400',
@@ -54,27 +83,46 @@ function translateIMError(error: string | null): string {
   return error;
 }
 
+// Helper function to deep-set a value in nested object by dot path
+function deepSet(obj: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
+  const keys = path.split('.');
+  const result = { ...obj };
+  let current: Record<string, unknown> = result;
+  for (let i = 0; i < keys.length - 1; i++) {
+    current[keys[i]] = { ...(current[keys[i]] as Record<string, unknown> || {}) };
+    current = current[keys[i]] as Record<string, unknown>;
+  }
+  current[keys[keys.length - 1]] = value;
+  return result;
+}
+
 const IMSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { config, status, isLoading } = useSelector((state: RootState) => state.im);
-  const [activePlatform, setActivePlatform] = useState<IMPlatform>('dingtalk');
-  const [testingPlatform, setTestingPlatform] = useState<IMPlatform | null>(null);
-  const [connectivityResults, setConnectivityResults] = useState<Partial<Record<IMPlatform, IMConnectivityTestResult>>>({});
-  const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<IMPlatform | null>(null);
+  const [activePlatform, setActivePlatform] = useState<Platform>('weixin');
+  const [testingPlatform, setTestingPlatform] = useState<Platform | null>(null);
+  const [connectivityResults, setConnectivityResults] = useState<Partial<Record<Platform, IMConnectivityTestResult>>>({});
+  const [connectivityModalPlatform, setConnectivityModalPlatform] = useState<Platform | null>(null);
   const [language, setLanguage] = useState<'zh' | 'en'>(i18nService.getLanguage());
   const [allowedUserIdInput, setAllowedUserIdInput] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
   // Re-entrancy guard for gateway toggle to prevent rapid ON→OFF→ON
-  const [togglingPlatform, setTogglingPlatform] = useState<IMPlatform | null>(null);
+  const [togglingPlatform, setTogglingPlatform] = useState<Platform | null>(null);
   // Track visibility of password fields (eye toggle)
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  // WeCom quick setup state
+  const [wecomQuickSetupStatus, setWecomQuickSetupStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
+  const [wecomQuickSetupError, setWecomQuickSetupError] = useState<string>('');
+  // Weixin QR login state
+  const [weixinQrStatus, setWeixinQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
+  const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
+  const [weixinQrError, setWeixinQrError] = useState<string>('');
+  const weixinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [localIp, setLocalIp] = useState<string>('');
+  const isMountedRef = useRef(true);
 
-  // Track the last-persisted NIM credentials so we can detect real changes on save
-  const savedNimConfigRef = useRef<{ appKey: string; account: string; token: string }>({
-    appKey: config.nim.appKey,
-    account: config.nim.account,
-    token: config.nim.token,
-  });
+  // OpenClaw config schema for schema-driven forms
+  const [openclawSchema, setOpenclawSchema] = useState<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> } | null>(null);
 
   // Subscribe to language changes
   useEffect(() => {
@@ -83,6 +131,113 @@ const IMSettings: React.FC = () => {
     });
     return unsubscribe;
   }, []);
+
+  // Track component mounted state for async operations
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  // Fetch local IP for POPO webhook placeholder
+  useEffect(() => {
+    window.electron?.im?.getLocalIp?.().then((ip: string) => {
+      if (isMountedRef.current) setLocalIp(ip);
+    }).catch(() => {});
+  }, []);
+
+  // Cleanup feishu QR timers on unmount
+  useEffect(() => {
+    return () => {
+      if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
+      if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
+    };
+  }, []);
+
+  // Reset feishu QR state when switching away from feishu
+  useEffect(() => {
+    if (activePlatform !== 'feishu') {
+      if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+      if (feishuQrCountdownTimerRef.current) { clearInterval(feishuQrCountdownTimerRef.current); feishuQrCountdownTimerRef.current = null; }
+      setFeishuQrStatus('idle');
+      setFeishuQrUrl('');
+      setFeishuQrError('');
+    }
+  }, [activePlatform]);
+
+  const handleFeishuStartQr = async () => {
+    if (feishuQrPollTimerRef.current) clearInterval(feishuQrPollTimerRef.current);
+    if (feishuQrCountdownTimerRef.current) clearInterval(feishuQrCountdownTimerRef.current);
+    setFeishuQrStatus('loading');
+    setFeishuQrError('');
+    try {
+      const result = await window.electron.feishu.install.qrcode(false);
+      if (!isMountedRef.current) return;
+      setFeishuQrUrl(result.url);
+      feishuQrDeviceCodeRef.current = result.deviceCode;
+      const expireIn = result.expireIn ?? 300;
+      setFeishuQrTimeLeft(expireIn);
+      setFeishuQrStatus('showing');
+
+      // Countdown
+      feishuQrCountdownTimerRef.current = setInterval(() => {
+        setFeishuQrTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(feishuQrCountdownTimerRef.current!);
+            feishuQrCountdownTimerRef.current = null;
+            if (feishuQrPollTimerRef.current) { clearInterval(feishuQrPollTimerRef.current); feishuQrPollTimerRef.current = null; }
+            setFeishuQrStatus('error');
+            setFeishuQrError(i18nService.t('feishuBotCreateWizardQrcodeExpired'));
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      // Poll
+      const intervalMs = Math.max(result.interval ?? 5, 3) * 1000;
+      feishuQrPollTimerRef.current = setInterval(async () => {
+        try {
+          const pollResult = await window.electron.feishu.install.poll(feishuQrDeviceCodeRef.current);
+          if (!isMountedRef.current) return;
+          if (pollResult.done && pollResult.appId && pollResult.appSecret) {
+            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            dispatch(setFeishuConfig({ appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true }));
+            await imService.updateConfig({ feishu: { ...config.feishu, appId: pollResult.appId, appSecret: pollResult.appSecret, enabled: true } });
+            if (!isMountedRef.current) return;   // re-check after async updateConfig
+            setFeishuQrStatus('success');
+          } else if (pollResult.error && pollResult.error !== 'authorization_pending' && pollResult.error !== 'slow_down') {
+            clearInterval(feishuQrPollTimerRef.current!); feishuQrPollTimerRef.current = null;
+            clearInterval(feishuQrCountdownTimerRef.current!); feishuQrCountdownTimerRef.current = null;
+            setFeishuQrStatus('error');
+            setFeishuQrError(pollResult.error);
+          }
+        } catch { /* keep retrying */ }
+      }, intervalMs);
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      setFeishuQrStatus('error');
+      setFeishuQrError(err?.message || '获取二维码失败');
+    }
+  };
+
+  // Reset wecom quick setup state when switching away from wecom
+  useEffect(() => {
+    if (activePlatform !== 'wecom') {
+      setWecomQuickSetupStatus('idle');
+      setWecomQuickSetupError('');
+    }
+  }, [activePlatform]);
+
+  // Reset weixin QR login state when switching away from weixin
+  useEffect(() => {
+    if (activePlatform !== 'weixin') {
+      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
+      setWeixinQrStatus('idle');
+      setWeixinQrUrl('');
+      setWeixinQrError('');
+    }
+  }, [activePlatform]);
 
   // Reset password visibility when switching platforms
   useEffect(() => {
@@ -95,6 +250,10 @@ const IMSettings: React.FC = () => {
     void imService.init().then(() => {
       if (!cancelled) {
         setConfigLoaded(true);
+        // Fetch OpenClaw config schema for schema-driven rendering
+        imService.getOpenClawConfigSchema().then(schema => {
+          if (schema && isMountedRef.current) setOpenclawSchema(schema);
+        });
       }
     });
     return () => {
@@ -104,83 +263,305 @@ const IMSettings: React.FC = () => {
     };
   }, []);
 
-  // Handle DingTalk config change
-  const handleDingTalkChange = (field: 'clientId' | 'clientSecret', value: string) => {
-    dispatch(setDingTalkConfig({ [field]: value }));
-  };
+  // Extract NIM channel schema and hints from the full OpenClaw config schema
+  const nimSchemaData = useMemo(() => {
+    if (!openclawSchema) return null;
+    const { schema, uiHints } = openclawSchema;
 
-  // Handle Feishu config change
-  const handleFeishuChange = (field: 'appId' | 'appSecret', value: string) => {
-    dispatch(setFeishuConfig({ [field]: value }));
-  };
+    // Find the NIM channel key — could be 'nim' or 'openclaw-nim'
+    const channelsProps = (schema as any)?.properties?.channels?.properties ?? {};
+    const channelKey = channelsProps['openclaw-nim'] ? 'openclaw-nim' : channelsProps['nim'] ? 'nim' : null;
+    if (!channelKey) return null;
 
-  // Handle QQ config change
-  const handleQQChange = (field: 'appId' | 'appSecret', value: string) => {
-    dispatch(setQQConfig({ [field]: value }));
-  };
+    const channelSchema = channelsProps[channelKey] as Record<string, unknown>;
+    if (!channelSchema) return null;
 
-  // Handle Telegram config change
-  const handleTelegramChange = (field: 'botToken' | 'allowedUserIds', value: string | string[]) => {
-    dispatch(setTelegramConfig({ [field]: value }));
-  };
-
-  // Handle Discord config change
-  const handleDiscordChange = (field: 'botToken', value: string) => {
-    dispatch(setDiscordConfig({ [field]: value }));
-  };
-
-  // Handle NIM config change
-  const handleNimChange = (
-    field: 'appKey' | 'account' | 'token' | 'accountWhitelist' | 'teamPolicy' | 'teamAllowlist' | 'qchatEnabled' | 'qchatServerIds',
-    value: string | boolean
-  ) => {
-    dispatch(setNimConfig({ [field]: value }));
-  };
-
-  // Handle Xiaomifeng config change
-  const handleXiaomifengChange = (field: 'clientId' | 'secret', value: string) => {
-    dispatch(setXiaomifengConfig({ [field]: value }));
-  };
-
-  // Handle WeCom config change
-  const handleWecomChange = (field: 'botId' | 'secret', value: string) => {
-    dispatch(setWecomConfig({ [field]: value }));
-  };
-
-  // Save config on blur — also auto-triggers NIM connectivity test when
-  // the NIM toggle is ON and credential fields have changed.
-  const handleSaveConfig = async () => {
-    if (!configLoaded) return;
-    await imService.updateConfig({ [activePlatform]: config[activePlatform] });
-
-    // Detect NIM credential changes while the gateway is enabled (only for NIM platform)
-    if (activePlatform === 'nim') {
-      const prev = savedNimConfigRef.current;
-      const cur = config.nim;
-      const nimCredentialsChanged =
-        cur.appKey !== prev.appKey ||
-        cur.account !== prev.account ||
-        cur.token !== prev.token;
-
-      // Update the snapshot regardless
-      savedNimConfigRef.current = { appKey: cur.appKey, account: cur.account, token: cur.token };
-
-      if (nimCredentialsChanged && cur.enabled && cur.appKey && cur.account && cur.token) {
-        // Auto-run connectivity test: stop → start → test (silently, no modal)
-        await imService.stopGateway('nim');
-        await imService.startGateway('nim');
-        await runConnectivityTest('nim', { nim: cur } as Partial<IMGatewayConfig>);
+    // Filter and strip prefix from uiHints
+    const prefix = `channels.${channelKey}.`;
+    const hints: Record<string, UiHint> = {};
+    for (const [key, value] of Object.entries(uiHints)) {
+      if (key.startsWith(prefix)) {
+        hints[key.slice(prefix.length)] = value as unknown as UiHint;
       }
+    }
+
+    return { schema: channelSchema, hints };
+  }, [openclawSchema]);
+
+  // Handle DingTalk OpenClaw config change
+  const dtOpenClawConfig = config.dingtalk;
+  const handleDingTalkOpenClawChange = (update: Partial<DingTalkOpenClawConfig>) => {
+    dispatch(setDingTalkConfig(update));
+  };
+  const handleSaveDingTalkOpenClawConfig = async (override?: Partial<DingTalkOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...dtOpenClawConfig, ...override }
+      : dtOpenClawConfig;
+    await imService.persistConfig({ dingtalk: configToSave });
+  };
+  const [dingtalkAllowedUserIdInput, setDingtalkAllowedUserIdInput] = useState('');
+
+  // Handle Feishu OpenClaw config change
+  const fsOpenClawConfig = config.feishu;
+  const handleFeishuOpenClawChange = (update: Partial<FeishuOpenClawConfig>) => {
+    dispatch(setFeishuConfig(update));
+  };
+  const handleSaveFeishuOpenClawConfig = async (override?: Partial<FeishuOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...fsOpenClawConfig, ...override }
+      : fsOpenClawConfig;
+    await imService.persistConfig({ feishu: configToSave });
+  };
+
+  // State for Feishu allow-from inputs
+  const [feishuAllowedUserIdInput, setFeishuAllowedUserIdInput] = useState('');
+  const [feishuGroupAllowIdInput, setFeishuGroupAllowIdInput] = useState('');
+  // Inline QR code state for feishu bot creation (mirroring WeCom quick-setup pattern)
+  const [feishuQrStatus, setFeishuQrStatus] = useState<'idle' | 'loading' | 'showing' | 'success' | 'error'>('idle');
+  const [feishuQrUrl, setFeishuQrUrl] = useState<string>('');
+  const [feishuQrTimeLeft, setFeishuQrTimeLeft] = useState<number>(0);
+  const [feishuQrError, setFeishuQrError] = useState<string>('');
+  // These don't need to be state — they don't affect rendering directly
+  const feishuQrDeviceCodeRef = useRef<string>('');
+  const feishuQrPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feishuQrCountdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Pairing state for OpenClaw platforms
+  const [pairingCodeInput, setPairingCodeInput] = useState<Record<string, string>>({});
+  const [pairingStatus, setPairingStatus] = useState<Record<string, { type: 'success' | 'error'; message: string } | null>>({});
+
+  const handleApprovePairing = async (platform: string, code: string) => {
+    setPairingStatus((prev) => ({ ...prev, [platform]: null }));
+    const result = await imService.approvePairingCode(platform, code);
+    if (result.success) {
+      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'success', message: i18nService.t('imPairingCodeApproved').replace('{code}', code) } }));
+    } else {
+      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'error', message: result.error || i18nService.t('imPairingCodeInvalid') } }));
+    }
+  };
+  // Handle Telegram OpenClaw config change
+  const tgOpenClawConfig = config.telegram;
+  const handleTelegramOpenClawChange = (update: Partial<TelegramOpenClawConfig>) => {
+    dispatch(setTelegramOpenClawConfig(update));
+  };
+  const handleSaveTelegramOpenClawConfig = async (override?: Partial<TelegramOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...tgOpenClawConfig, ...override }
+      : tgOpenClawConfig;
+    await imService.persistConfig({ telegram: configToSave });
+  };
+
+  // Handle QQ OpenClaw config change
+  const qqOpenClawConfig = config.qq;
+  const handleQQOpenClawChange = (update: Partial<QQOpenClawConfig>) => {
+    dispatch(setQQConfig(update));
+  };
+  const handleSaveQQOpenClawConfig = async (override?: Partial<QQOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...qqOpenClawConfig, ...override }
+      : qqOpenClawConfig;
+    await imService.persistConfig({ qq: configToSave });
+  };
+
+  // Handle Discord OpenClaw config change
+  const dcOpenClawConfig = config.discord;
+  const handleDiscordOpenClawChange = (update: Partial<DiscordOpenClawConfig>) => {
+    dispatch(setDiscordConfig(update));
+  };
+  const handleSaveDiscordOpenClawConfig = async (override?: Partial<DiscordOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...dcOpenClawConfig, ...override }
+      : dcOpenClawConfig;
+    await imService.persistConfig({ discord: configToSave });
+  };
+
+  // State for Discord allow-from inputs
+  const [discordAllowedUserIdInput, setDiscordAllowedUserIdInput] = useState('');
+  const [discordServerAllowIdInput, setDiscordServerAllowIdInput] = useState('');
+
+  // State for POPO allow-from inputs
+  const [popoAllowedUserIdInput, setPopoAllowedUserIdInput] = useState('');
+  const [popoGroupAllowIdInput, setPopoGroupAllowIdInput] = useState('');
+
+
+  // Handle NetEase Bee config change
+  const handleNeteaseBeeChanChange = (field: 'clientId' | 'secret', value: string) => {
+    dispatch(setNeteaseBeeChanConfig({ [field]: value }));
+  };
+
+  // Handle WeCom OpenClaw config change
+  const wecomOpenClawConfig = config.wecom;
+  const handleWecomOpenClawChange = (update: Partial<WecomOpenClawConfig>) => {
+    dispatch(setWecomConfig(update));
+  };
+  const handleSaveWecomOpenClawConfig = async (override?: Partial<WecomOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...wecomOpenClawConfig, ...override }
+      : wecomOpenClawConfig;
+    await imService.persistConfig({ wecom: configToSave });
+  };
+
+  // Handle Weixin OpenClaw config
+  const weixinOpenClawConfig = config.weixin;
+
+  // Handle POPO OpenClaw config change
+  const popoConfig = config.popo;
+  const handlePopoChange = (update: Partial<PopoOpenClawConfig>) => {
+    dispatch(setPopoConfig(update));
+  };
+  const handleSavePopoConfig = async (override?: Partial<PopoOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...popoConfig, ...override }
+      : popoConfig;
+    await imService.persistConfig({ popo: configToSave });
+  };
+
+  const handleWecomQuickSetup = async () => {
+    setWecomQuickSetupStatus('pending');
+    setWecomQuickSetupError('');
+    try {
+      const bot = await WecomAIBotSDK.openBotInfoAuthWindow({
+        source: 'lobster-ai',
+      });
+      if (!isMountedRef.current) return;
+
+      // Save credentials + enable in one atomic operation.
+      // im:config:set handler in main process already calls
+      // syncOpenClawConfig({ restartGatewayIfRunning: true }) when wecom config changes,
+      // so we do NOT call stopGateway/startGateway here to avoid redundant gateway restarts.
+      const fullConfig = { ...wecomOpenClawConfig, botId: bot.botid, secret: bot.secret, enabled: true };
+      dispatch(setWecomConfig({ botId: bot.botid, secret: bot.secret, enabled: true }));
+      dispatch(clearError());
+      await imService.updateConfig({ wecom: fullConfig });
+      if (!isMountedRef.current) return;
+      // Refresh status so the UI reflects the new connected state immediately.
+      // OpenClaw channels derive `connected` from config, but updateConfig only
+      // reloads config — status needs a separate refresh.
+      await imService.loadStatus();
+      if (!isMountedRef.current) return;
+      setWecomQuickSetupStatus('success');
+    } catch (error: unknown) {
+      if (!isMountedRef.current) return;
+      // Roll back optimistic Redux dispatch so UI matches persisted state
+      dispatch(setWecomConfig({
+        botId: wecomOpenClawConfig.botId,
+        secret: wecomOpenClawConfig.secret,
+        enabled: wecomOpenClawConfig.enabled,
+      }));
+      setWecomQuickSetupStatus('error');
+      const err = error as { message?: string; code?: string };
+      setWecomQuickSetupError(err.message || err.code || 'Unknown error');
     }
   };
 
-  // Save NIM config with explicit updated fields (for select/toggle that need immediate save)
-  // This avoids the race condition where Redux state hasn't updated yet
-  const saveNimConfigWithUpdate = async (updates: Partial<typeof config.nim>) => {
-    if (!configLoaded) return;
-    const updatedNimConfig = { ...config.nim, ...updates };
-    await imService.updateConfig({ nim: updatedNimConfig });
+  const handleWeixinQrLogin = async () => {
+    setWeixinQrStatus('loading');
+    setWeixinQrError('');
+    try {
+      const startResult = await window.electron.im.weixinQrLoginStart();
+      if (!isMountedRef.current) return;
+
+      if (!startResult.success || !startResult.qrDataUrl) {
+        setWeixinQrStatus('error');
+        setWeixinQrError(startResult.message || i18nService.t('imWeixinQrFailed'));
+        return;
+      }
+
+      setWeixinQrUrl(startResult.qrDataUrl);
+      setWeixinQrStatus('showing');
+
+      // QR expires in ~2 minutes. Show error and let user retry.
+      if (weixinTimerRef.current) clearTimeout(weixinTimerRef.current);
+      weixinTimerRef.current = setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setWeixinQrStatus('error');
+        setWeixinQrError(i18nService.t('imWeixinQrExpired'));
+      }, 120000);
+
+      // Start polling for scan result
+      setWeixinQrStatus('waiting');
+      const waitResult = await window.electron.im.weixinQrLoginWait(startResult.sessionKey);
+      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
+      if (!isMountedRef.current) return;
+
+      if (waitResult.success && waitResult.connected) {
+        setWeixinQrStatus('success');
+        // Enable weixin and save config with accountId
+        const accountId = waitResult.accountId || '';
+        const fullConfig = { ...weixinOpenClawConfig, enabled: true, accountId };
+        dispatch(setWeixinConfig({ enabled: true, accountId }));
+        dispatch(clearError());
+        await imService.updateConfig({ weixin: fullConfig });
+        await imService.loadStatus();
+      } else {
+        setWeixinQrStatus('error');
+        setWeixinQrError(waitResult.message || i18nService.t('imWeixinQrFailed'));
+      }
+    } catch (err) {
+      if (weixinTimerRef.current) { clearTimeout(weixinTimerRef.current); weixinTimerRef.current = null; }
+      if (!isMountedRef.current) return;
+      setWeixinQrStatus('error');
+      setWeixinQrError(String(err));
+    }
   };
+
+
+  const handleSaveConfig = async () => {
+    if (!configLoaded) return;
+
+    // For Telegram, save telegram config directly
+    if (activePlatform === 'telegram') {
+      await imService.persistConfig({ telegram: tgOpenClawConfig });
+      return;
+    }
+
+    // For Discord, save discord config directly
+    if (activePlatform === 'discord') {
+      await imService.persistConfig({ discord: dcOpenClawConfig });
+      return;
+    }
+
+    // For Feishu, save feishu config directly
+    if (activePlatform === 'feishu') {
+      await imService.persistConfig({ feishu: fsOpenClawConfig });
+      return;
+    }
+
+    // For QQ, save qq config directly (OpenClaw mode)
+    if (activePlatform === 'qq') {
+      await imService.persistConfig({ qq: qqOpenClawConfig });
+      return;
+    }
+
+    // For WeCom, save wecom config directly (OpenClaw mode)
+    if (activePlatform === 'wecom') {
+      await imService.persistConfig({ wecom: wecomOpenClawConfig });
+      return;
+    }
+
+    // For Weixin, save weixin config directly (OpenClaw mode)
+    if (activePlatform === 'weixin') {
+      await imService.persistConfig({ weixin: weixinOpenClawConfig });
+      return;
+    }
+
+    // For POPO, save popo config directly (OpenClaw mode)
+    if (activePlatform === 'popo') {
+      await imService.persistConfig({ popo: popoConfig });
+      return;
+    }
+
+    await imService.persistConfig({ [activePlatform]: config[activePlatform] });
+  };
+
+
 
   const getCheckTitle = (code: IMConnectivityCheck['code']): string => {
     return i18nService.t(`imConnectivityCheckTitle_${code}`);
@@ -209,7 +590,7 @@ const IMSettings: React.FC = () => {
   };
 
   const runConnectivityTest = async (
-    platform: IMPlatform,
+    platform: Platform,
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult | null> => {
     setTestingPlatform(platform);
@@ -222,13 +603,117 @@ const IMSettings: React.FC = () => {
   };
 
   // Toggle gateway on/off and persist enabled state
-  const toggleGateway = async (platform: IMPlatform) => {
+  const toggleGateway = async (platform: Platform) => {
     // Re-entrancy guard: if a toggle is already in progress for this platform, bail out.
     // This prevents rapid ON→OFF→ON clicks from causing concurrent native SDK init/uninit.
     if (togglingPlatform === platform) return;
     setTogglingPlatform(platform);
 
     try {
+      // All OpenClaw platforms: im:config:set handler already calls
+      // syncOpenClawConfig({ restartGatewayIfRunning: true }), so no startGateway/stopGateway needed.
+      // Only updateConfig + loadStatus is required.
+      // Pessimistic UI update: wait for IPC to complete before updating Redux state.
+      // This prevents UI/backend state divergence when rapidly toggling, since the
+      // backend debounces syncOpenClawConfig calls with a 600ms window.
+      if (platform === 'telegram') {
+        const newEnabled = !tgOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ telegram: { ...tgOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setTelegramOpenClawConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'dingtalk') {
+        const newEnabled = !dtOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ dingtalk: { ...dtOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setDingTalkConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'feishu') {
+        const newEnabled = !fsOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ feishu: { ...fsOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setFeishuConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'discord') {
+        const newEnabled = !dcOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ discord: { ...dcOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setDiscordConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'qq') {
+        const newEnabled = !qqOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ qq: { ...qqOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setQQConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'wecom') {
+        const newEnabled = !wecomOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ wecom: { ...wecomOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setWecomConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'weixin') {
+        const newEnabled = !weixinOpenClawConfig.enabled;
+        const success = await imService.updateConfig({ weixin: { ...weixinOpenClawConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setWeixinConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
+      if (platform === 'popo') {
+        const newEnabled = !popoConfig.enabled;
+        const success = await imService.updateConfig({ popo: { ...popoConfig, enabled: newEnabled } });
+        if (success) {
+          dispatch(setPopoConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+      if (platform === 'nim') {
+        const newEnabled = !config.nim.enabled;
+        const success = await imService.updateConfig({ nim: { ...config.nim, enabled: newEnabled } });
+        if (success) {
+          dispatch(setNimConfig({ enabled: newEnabled }));
+          if (newEnabled) dispatch(clearError());
+          await imService.loadStatus();
+        }
+        return;
+      }
+
       const isEnabled = config[platform].enabled;
       const newEnabled = !isEnabled;
 
@@ -266,13 +751,15 @@ const IMSettings: React.FC = () => {
   const telegramConnected = status.telegram.connected;
   const discordConnected = status.discord.connected;
   const nimConnected = status.nim.connected;
-  const xiaomifengConnected = status.xiaomifeng?.connected ?? false;
+  const neteaseBeeChanConnected = status['netease-bee']?.connected ?? false;
   const qqConnected = status.qq?.connected ?? false;
   const wecomConnected = status.wecom?.connected ?? false;
+  const weixinConnected = status.weixin?.connected ?? false;
+  const popoConnected = status.popo?.connected ?? false;
 
   // Compute visible platforms based on language
-  const platforms = useMemo<IMPlatform[]>(() => {
-    return getVisibleIMPlatforms(language) as IMPlatform[];
+  const platforms = useMemo<Platform[]>(() => {
+    return getVisibleIMPlatforms(language) as Platform[];
   }, [language]);
 
   // Ensure activePlatform is always in visible platforms when language changes
@@ -284,12 +771,12 @@ const IMSettings: React.FC = () => {
   }, [platforms, activePlatform]);
 
   // Check if platform can be started
-  const canStart = (platform: IMPlatform): boolean => {
+  const canStart = (platform: Platform): boolean => {
     if (platform === 'dingtalk') {
       return !!(config.dingtalk.clientId && config.dingtalk.clientSecret);
     }
     if (platform === 'telegram') {
-      return !!config.telegram.botToken;
+      return !!tgOpenClawConfig.botToken;
     }
     if (platform === 'discord') {
       return !!config.discord.botToken;
@@ -297,48 +784,138 @@ const IMSettings: React.FC = () => {
     if (platform === 'nim') {
       return !!(config.nim.appKey && config.nim.account && config.nim.token);
     }
-    if (platform === 'xiaomifeng') {
-      return !!(config.xiaomifeng.clientId && config.xiaomifeng.secret);
+    if (platform === 'netease-bee') {
+      return !!(config['netease-bee'].clientId && config['netease-bee'].secret);
     }
     if (platform === 'qq') {
       return !!(config.qq.appId && config.qq.appSecret);
     }
     if (platform === 'wecom') {
-      return !!(config.wecom.botId && config.wecom.secret);
+      return !!(wecomOpenClawConfig.botId && wecomOpenClawConfig.secret);
+    }
+    if (platform === 'weixin') {
+      return true; // No credentials needed, connects via QR code in CLI
+    }
+    if (platform === 'popo') {
+      const effectiveMode = config.popo.connectionMode || (config.popo.token ? 'webhook' : 'websocket');
+      if (effectiveMode === 'webhook') {
+        return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
+      }
+      return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
     }
     return !!(config.feishu.appId && config.feishu.appSecret);
   };
 
   // Get platform enabled state (persisted toggle state)
-  const isPlatformEnabled = (platform: IMPlatform): boolean => {
+  const isPlatformEnabled = (platform: Platform): boolean => {
     return config[platform].enabled;
   };
 
   // Get platform connection status (runtime state)
-  const getPlatformConnected = (platform: IMPlatform): boolean => {
+  const getPlatformConnected = (platform: Platform): boolean => {
     if (platform === 'dingtalk') return dingtalkConnected;
     if (platform === 'telegram') return telegramConnected;
     if (platform === 'discord') return discordConnected;
     if (platform === 'nim') return nimConnected;
-    if (platform === 'xiaomifeng') return xiaomifengConnected;
+    if (platform === 'netease-bee') return neteaseBeeChanConnected;
     if (platform === 'qq') return qqConnected;
     if (platform === 'wecom') return wecomConnected;
+    if (platform === 'weixin') return weixinConnected;
+    if (platform === 'popo') return popoConnected;
     return feishuConnected;
   };
 
   // Get platform transient starting status
-  const getPlatformStarting = (platform: IMPlatform): boolean => {
+  const getPlatformStarting = (platform: Platform): boolean => {
     if (platform === 'discord') return status.discord.starting;
     return false;
   };
 
-  const handleConnectivityTest = async (platform: IMPlatform) => {
+  const handleConnectivityTest = async (platform: Platform) => {
     // Re-entrancy guard: if a test is already running, do nothing.
     if (testingPlatform) return;
 
     setConnectivityModalPlatform(platform);
+    setTestingPlatform(platform);
+
+    // For Telegram, persist telegram config and test
+    if (platform === 'telegram') {
+      await imService.persistConfig({ telegram: tgOpenClawConfig });
+      const result = await runConnectivityTest(platform, {
+        telegram: tgOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      // Auto-enable: if OFF and auth_check passed, turn on automatically
+      if (!tgOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
+      return;
+    }
+
+    // For QQ, persist qq config and test (OpenClaw mode)
+    if (platform === 'qq') {
+      await imService.persistConfig({ qq: qqOpenClawConfig });
+      const result = await runConnectivityTest(platform, {
+        qq: qqOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      if (!qqOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
+      return;
+    }
+
+    // For WeCom, persist wecom config and test (OpenClaw mode)
+    if (platform === 'wecom') {
+      await imService.persistConfig({ wecom: wecomOpenClawConfig });
+      const result = await runConnectivityTest(platform, {
+        wecom: wecomOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      if (!wecomOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
+      return;
+    }
+
+    // For Weixin, persist weixin config and test (OpenClaw mode)
+    if (platform === 'weixin') {
+      await imService.persistConfig({ weixin: weixinOpenClawConfig });
+      const result = await runConnectivityTest(platform, {
+        weixin: weixinOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      if (!weixinOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
+      return;
+    }
+
+    // For Feishu, persist feishu config and test (OpenClaw mode)
+    if (platform === 'feishu') {
+      await imService.persistConfig({ feishu: fsOpenClawConfig });
+      const result = await runConnectivityTest(platform, {
+        feishu: fsOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      if (!fsOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
+      return;
+    }
+
     // 1. Persist latest config to backend (without changing enabled state)
-    await imService.updateConfig({
+    await imService.persistConfig({
       [platform]: config[platform],
     } as Partial<IMGatewayConfig>);
 
@@ -348,12 +925,6 @@ const IMSettings: React.FC = () => {
     // The backend's testNimConnectivity already manages the SDK lifecycle
     // (stop main → probe with temp instance → restart main) under a mutex,
     // so doing stop/start here would cause a race condition and potential crash.
-    if (isEnabled && platform !== 'nim') {
-      // Gateway is ON: restart it to pick up the latest credentials, then run the
-      // gateway_running check (which also calls runAuthProbe internally via testGateway).
-      await imService.stopGateway(platform);
-      await imService.startGateway(platform);
-    }
     // When the gateway is OFF we skip stop/start entirely.
     // The main process testGateway → runAuthProbe will spawn an isolated
     // temporary NimGateway (for NIM) or use stateless HTTP calls for other
@@ -376,7 +947,7 @@ const IMSettings: React.FC = () => {
   };
 
   // Handle platform toggle
-  const handlePlatformToggle = (platform: IMPlatform) => {
+  const handlePlatformToggle = (platform: Platform) => {
     // Block toggle if a toggle is already in progress for any platform
     if (togglingPlatform) return;
     const isEnabled = isPlatformEnabled(platform);
@@ -389,21 +960,23 @@ const IMSettings: React.FC = () => {
   };
 
   // Toggle gateway on/off - map platform to Redux action
-  const getSetConfigAction = (platform: IMPlatform) => {
-    const actionMap: Record<IMPlatform, any> = {
+  const getSetConfigAction = (platform: Platform) => {
+    const actionMap: Record<Platform, any> = {
       dingtalk: setDingTalkConfig,
       feishu: setFeishuConfig,
+      telegram: setTelegramOpenClawConfig,
       qq: setQQConfig,
-      telegram: setTelegramConfig,
       discord: setDiscordConfig,
       nim: setNimConfig,
-      xiaomifeng: setXiaomifengConfig,
+      'netease-bee': setNeteaseBeeChanConfig,
       wecom: setWecomConfig,
+      weixin: setWeixinConfig,
+      popo: setPopoConfig,
     };
     return actionMap[platform];
   };
 
-  const renderConnectivityTestButton = (platform: IMPlatform) => (
+  const renderConnectivityTestButton = (platform: Platform) => (
     <button
       type="button"
       onClick={() => handleConnectivityTest(platform)}
@@ -432,13 +1005,64 @@ const IMSettings: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [connectivityModalPlatform]);
 
+  const renderPairingSection = (platform: string) => (
+    <div className="space-y-2">
+      <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        {i18nService.t('imPairingApproval')}
+      </label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={pairingCodeInput[platform] || ''}
+          onChange={(e) => {
+            setPairingCodeInput((prev) => ({ ...prev, [platform]: e.target.value.toUpperCase() }));
+            if (pairingStatus[platform]) setPairingStatus((prev) => ({ ...prev, [platform]: null }));
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              const code = (pairingCodeInput[platform] || '').trim();
+              if (code) {
+                void handleApprovePairing(platform, code).then(() => {
+                  setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+                });
+              }
+            }
+          }}
+          className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm font-mono uppercase tracking-widest transition-colors"
+          placeholder={i18nService.t('imPairingCodePlaceholder')}
+          maxLength={8}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const code = (pairingCodeInput[platform] || '').trim();
+            if (code) {
+              void handleApprovePairing(platform, code).then(() => {
+                setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+              });
+            }
+          }}
+          className="px-3 py-2 rounded-lg text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors"
+        >
+          {i18nService.t('imPairingApprove')}
+        </button>
+      </div>
+      {pairingStatus[platform] && (
+        <p className={`text-xs ${pairingStatus[platform]!.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+          {pairingStatus[platform]!.type === 'success' ? '\u2713' : '\u2717'} {pairingStatus[platform]!.message}
+        </p>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex h-full gap-4">
       {/* Platform List - Left Side */}
       <div className="w-48 flex-shrink-0 border-r border-claude-border pr-3 space-y-2 overflow-y-auto">
         {platforms.map((platform) => {
-          const meta = platformMeta[platform];
-          const isEnabled = isPlatformEnabled(platform);
+                const logo = PlatformRegistry.logo(platform);
+           const isEnabled = isPlatformEnabled(platform);
           const isConnected = getPlatformConnected(platform) || getPlatformStarting(platform);
           const canToggle = isEnabled || canStart(platform);
           return (
@@ -454,8 +1078,8 @@ const IMSettings: React.FC = () => {
               <div className="flex flex-1 items-center">
                 <div className="mr-2 flex h-7 w-7 items-center justify-center">
                   <img
-                    src={meta.logo}
-                    alt={meta.label}
+                    src={logo}
+                    alt={i18nService.t(platform)}
                     className="w-6 h-6 object-contain rounded-md"
                   />
                 </div>
@@ -496,12 +1120,12 @@ const IMSettings: React.FC = () => {
         {/* Header with status */}
         <div className="flex items-center gap-3 pb-3 border-b border-claude-border/60">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white p-1">
-              <img
-                src={platformMeta[activePlatform].logo}
-                alt={platformMeta[activePlatform].label}
-                className="w-4 h-4 object-contain rounded"
-              />
+             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white dark:bg-claude-darkBorder/30 p-1">
+               <img
+                src={PlatformRegistry.logo(activePlatform)}
+                 alt={i18nService.t(activePlatform)}
+                 className="w-4 h-4 object-contain rounded"
+               />
             </div>
             <h3 className="text-sm font-medium text-claude-text">
               {`${i18nService.t(activePlatform)}${i18nService.t('settings')}`}
@@ -520,9 +1144,19 @@ const IMSettings: React.FC = () => {
           </div>
         </div>
 
+
         {/* DingTalk Settings */}
         {activePlatform === 'dingtalk' && (
           <div className="space-y-3">
+            <PlatformGuide
+              steps={[
+                i18nService.t('imDingtalkGuideStep1'),
+                i18nService.t('imDingtalkGuideStep2'),
+                i18nService.t('imDingtalkGuideStep3'),
+                i18nService.t('imDingtalkGuideStep4'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('dingtalk')}
+            />
             {/* Client ID */}
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-claude-textSecondary">
@@ -531,18 +1165,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.dingtalk.clientId}
-                  onChange={(e) => handleDingTalkChange('clientId', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  value={dtOpenClawConfig.clientId}
+                  onChange={(e) => handleDingTalkOpenClawChange({ clientId: e.target.value })}
+                  onBlur={() => handleSaveDingTalkOpenClawConfig()}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="dingxxxxxx"
                 />
-                {config.dingtalk.clientId && (
+                {dtOpenClawConfig.clientId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleDingTalkChange('clientId', ''); void imService.updateConfig({ dingtalk: { ...config.dingtalk, clientId: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleDingTalkOpenClawChange({ clientId: '' }); void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, clientId: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -560,18 +1194,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['dingtalk.clientSecret'] ? 'text' : 'password'}
-                  value={config.dingtalk.clientSecret}
-                  onChange={(e) => handleDingTalkChange('clientSecret', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  value={dtOpenClawConfig.clientSecret}
+                  onChange={(e) => handleDingTalkOpenClawChange({ clientSecret: e.target.value })}
+                  onBlur={() => handleSaveDingTalkOpenClawConfig()}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.dingtalk.clientSecret && (
+                  {dtOpenClawConfig.clientSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleDingTalkChange('clientSecret', ''); void imService.updateConfig({ dingtalk: { ...config.dingtalk, clientSecret: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleDingTalkOpenClawChange({ clientSecret: '' }); void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, clientSecret: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -589,6 +1223,232 @@ const IMSettings: React.FC = () => {
               </div>
             </div>
 
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={dtOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as DingTalkOpenClawConfig['dmPolicy'] };
+                      handleDingTalkOpenClawChange(update);
+                      void handleSaveDingTalkOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {dtOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('dingtalk')}
+
+                {/* Allow From (User IDs) */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={dingtalkAllowedUserIdInput}
+                      onChange={(e) => setDingtalkAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = dingtalkAllowedUserIdInput.trim();
+                          if (id && !dtOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...dtOpenClawConfig.allowFrom, id];
+                            handleDingTalkOpenClawChange({ allowFrom: newIds });
+                            setDingtalkAllowedUserIdInput('');
+                            void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imDingtalkUserIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = dingtalkAllowedUserIdInput.trim();
+                        if (id && !dtOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...dtOpenClawConfig.allowFrom, id];
+                          handleDingTalkOpenClawChange({ allowFrom: newIds });
+                          setDingtalkAllowedUserIdInput('');
+                          void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {dtOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {dtOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = dtOpenClawConfig.allowFrom.filter((x) => x !== id);
+                              handleDingTalkOpenClawChange({ allowFrom: newIds });
+                              void imService.persistConfig({ dingtalk: { ...dtOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 transition-colors"
+                          >
+                            <XMarkIcon className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={dtOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as DingTalkOpenClawConfig['groupPolicy'] };
+                      handleDingTalkOpenClawChange(update);
+                      void handleSaveDingTalkOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">{i18nService.t('imGroupPolicyOpen')}</option>
+                    <option value="allowlist">{i18nService.t('imGroupPolicyAllowlist')}</option>
+                  </select>
+                </div>
+
+                {/* Session Timeout (deprecated) */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary opacity-60">
+                    {i18nService.t('imSessionTimeout')}
+                  </label>
+                  <input
+                    type="number"
+                    value={Math.round(dtOpenClawConfig.sessionTimeout / 60000)}
+                    onChange={(e) => {
+                      const minutes = parseInt(e.target.value, 10);
+                      if (!isNaN(minutes) && minutes > 0) {
+                        handleDingTalkOpenClawChange({ sessionTimeout: minutes * 60000 });
+                      }
+                    }}
+                    onBlur={() => handleSaveDingTalkOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors opacity-60"
+                    min="1"
+                    placeholder="30"
+                  />
+                </div>
+
+                {/* Separate Session by Conversation */}
+                <label className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <input
+                    type="checkbox"
+                    checked={dtOpenClawConfig.separateSessionByConversation}
+                    onChange={(e) => {
+                      const update = { separateSessionByConversation: e.target.checked };
+                      handleDingTalkOpenClawChange(update);
+                      void handleSaveDingTalkOpenClawConfig(update);
+                    }}
+                    className="rounded border-gray-300 dark:border-gray-600"
+                  />
+                  <span>
+                    {i18nService.t('imSeparateSessionByConversation')}
+                    <span className="ml-1 opacity-60">— {i18nService.t('imSeparateSessionByConversationDesc')}</span>
+                  </span>
+                </label>
+
+                {/* Group Session Scope (only visible when separateSessionByConversation is on) */}
+                {dtOpenClawConfig.separateSessionByConversation && (
+                  <div className="space-y-1.5 pl-4">
+                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      {i18nService.t('imGroupSessionScope')}
+                    </label>
+                    <select
+                      value={dtOpenClawConfig.groupSessionScope}
+                      onChange={(e) => {
+                        const update = { groupSessionScope: e.target.value as 'group' | 'group_sender' };
+                        handleDingTalkOpenClawChange(update);
+                        void handleSaveDingTalkOpenClawConfig(update);
+                      }}
+                      className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    >
+                      <option value="group">{i18nService.t('imGroupSessionScopeGroup')}</option>
+                      <option value="group_sender">{i18nService.t('imGroupSessionScopeGroupSender')}</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Shared Memory Across Conversations */}
+                <label className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <input
+                    type="checkbox"
+                    checked={dtOpenClawConfig.sharedMemoryAcrossConversations}
+                    onChange={(e) => {
+                      const update = { sharedMemoryAcrossConversations: e.target.checked };
+                      handleDingTalkOpenClawChange(update);
+                      void handleSaveDingTalkOpenClawConfig(update);
+                    }}
+                    className="rounded border-gray-300 dark:border-gray-600"
+                  />
+                  <span>
+                    {i18nService.t('imSharedMemoryAcrossConversations')}
+                    <span className="ml-1 opacity-60">— {i18nService.t('imSharedMemoryAcrossConversationsDesc')}</span>
+                  </span>
+                </label>
+
+                {/* Gateway Base URL */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('imGatewayBaseUrl')}
+                  </label>
+                  <input
+                    type="text"
+                    value={dtOpenClawConfig.gatewayBaseUrl}
+                    onChange={(e) => {
+                      handleDingTalkOpenClawChange({ gatewayBaseUrl: e.target.value });
+                    }}
+                    onBlur={() => handleSaveDingTalkOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder={i18nService.t('imGatewayBaseUrlPlaceholder')}
+                  />
+                </div>
+
+                {/* Debug */}
+                <label className="flex items-center gap-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  <input
+                    type="checkbox"
+                    checked={dtOpenClawConfig.debug}
+                    onChange={(e) => {
+                      const update = { debug: e.target.checked };
+                      handleDingTalkOpenClawChange(update);
+                      void handleSaveDingTalkOpenClawConfig(update);
+                    }}
+                    className="rounded border-gray-300 dark:border-gray-600"
+                  />
+                  {i18nService.t('imDebugMode')}
+                </label>
+              </div>
+            </details>
+
             <div className="pt-1">
               {renderConnectivityTestButton('dingtalk')}
             </div>
@@ -605,6 +1465,72 @@ const IMSettings: React.FC = () => {
         {/* Feishu Settings */}
         {activePlatform === 'feishu' && (
           <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60 p-4 text-center space-y-3">
+              {(feishuQrStatus === 'idle' || feishuQrStatus === 'error') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleFeishuStartQr()}
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('feishuBotCreateWizardScanBtn')}
+                  </button>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('feishuBotCreateWizardScanHint')}
+                  </p>
+                  {feishuQrStatus === 'error' && feishuQrError && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                      {feishuQrError}
+                    </div>
+                  )}
+                </>
+              )}
+              {feishuQrStatus === 'loading' && (
+                <div className="flex flex-col items-center gap-2 py-2">
+                  <ArrowPathIcon className="h-7 w-7 text-claude-accent animate-spin" />
+                  <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">正在生成二维码…</span>
+                </div>
+              )}
+              {feishuQrStatus === 'showing' && feishuQrUrl && (
+                <div className="flex flex-col items-center gap-2">
+                  <div className="p-2 bg-white rounded-lg inline-block">
+                    <QRCodeSVG value={feishuQrUrl} size={160} />
+                  </div>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary max-w-[240px]">
+                    {i18nService.t('feishuBotCreateWizardQrcodeDesc')}
+                  </p>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {feishuQrTimeLeft}s
+                  </p>
+                </div>
+              )}
+              {feishuQrStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('feishuBotCreateWizardSuccessTitle')}
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+              <span className="px-3 text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary whitespace-nowrap">
+                {i18nService.t('feishuBotCreateWizardOrManual')}
+              </span>
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+            </div>
+
+            {/* Manual guide */}
+            <PlatformGuide
+              steps={[
+                i18nService.t('imFeishuGuideStep1'),
+                i18nService.t('imFeishuGuideStep2'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('feishu')}
+            />
             {/* App ID */}
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-claude-textSecondary">
@@ -613,18 +1539,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.feishu.appId}
-                  onChange={(e) => handleFeishuChange('appId', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  value={fsOpenClawConfig.appId}
+                  onChange={(e) => handleFeishuOpenClawChange({ appId: e.target.value })}
+                  onBlur={() => handleSaveFeishuOpenClawConfig()}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="cli_xxxxx"
                 />
-                {config.feishu.appId && (
+                {fsOpenClawConfig.appId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleFeishuChange('appId', ''); void imService.updateConfig({ feishu: { ...config.feishu, appId: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleFeishuOpenClawChange({ appId: '' }); void imService.persistConfig({ feishu: { ...fsOpenClawConfig, appId: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -642,18 +1568,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['feishu.appSecret'] ? 'text' : 'password'}
-                  value={config.feishu.appSecret}
-                  onChange={(e) => handleFeishuChange('appSecret', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  value={fsOpenClawConfig.appSecret}
+                  onChange={(e) => handleFeishuOpenClawChange({ appSecret: e.target.value })}
+                  onBlur={() => handleSaveFeishuOpenClawConfig()}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.feishu.appSecret && (
+                  {fsOpenClawConfig.appSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleFeishuChange('appSecret', ''); void imService.updateConfig({ feishu: { ...config.feishu, appSecret: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleFeishuOpenClawChange({ appSecret: '' }); void imService.persistConfig({ feishu: { ...fsOpenClawConfig, appSecret: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -671,6 +1597,261 @@ const IMSettings: React.FC = () => {
               </div>
             </div>
 
+            {/* Domain */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Domain
+              </label>
+              <select
+                value={fsOpenClawConfig.domain}
+                onChange={(e) => {
+                  const update = { domain: e.target.value };
+                  handleFeishuOpenClawChange(update);
+                  void handleSaveFeishuOpenClawConfig(update);
+                }}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+              >
+                <option value="feishu">{i18nService.t('imFeishuDomainFeishu')}</option>
+                <option value="lark">{i18nService.t('imFeishuDomainLark')}</option>
+              </select>
+            </div>
+
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={fsOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as FeishuOpenClawConfig['dmPolicy'] };
+                      handleFeishuOpenClawChange(update);
+                      void handleSaveFeishuOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {fsOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('feishu')}
+
+                {/* Allow From (User IDs) */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={feishuAllowedUserIdInput}
+                      onChange={(e) => setFeishuAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = feishuAllowedUserIdInput.trim();
+                          if (id && !fsOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...fsOpenClawConfig.allowFrom, id];
+                            handleFeishuOpenClawChange({ allowFrom: newIds });
+                            setFeishuAllowedUserIdInput('');
+                            void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imFeishuUserIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = feishuAllowedUserIdInput.trim();
+                        if (id && !fsOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...fsOpenClawConfig.allowFrom, id];
+                          handleFeishuOpenClawChange({ allowFrom: newIds });
+                          setFeishuAllowedUserIdInput('');
+                          void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {fsOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {fsOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = fsOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              handleFeishuOpenClawChange({ allowFrom: newIds });
+                              void imService.persistConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={fsOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as FeishuOpenClawConfig['groupPolicy'] };
+                      handleFeishuOpenClawChange(update);
+                      void handleSaveFeishuOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="allowlist">Allowlist</option>
+                    <option value="open">Open</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+
+                {/* Group Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Allow From (Chat IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={feishuGroupAllowIdInput}
+                      onChange={(e) => setFeishuGroupAllowIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = feishuGroupAllowIdInput.trim();
+                          if (id && !fsOpenClawConfig.groupAllowFrom.includes(id)) {
+                            const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
+                            handleFeishuOpenClawChange({ groupAllowFrom: newIds });
+                            setFeishuGroupAllowIdInput('');
+                            void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imFeishuChatIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = feishuGroupAllowIdInput.trim();
+                        if (id && !fsOpenClawConfig.groupAllowFrom.includes(id)) {
+                          const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
+                          handleFeishuOpenClawChange({ groupAllowFrom: newIds });
+                          setFeishuGroupAllowIdInput('');
+                          void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {fsOpenClawConfig.groupAllowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {fsOpenClawConfig.groupAllowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = fsOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
+                              handleFeishuOpenClawChange({ groupAllowFrom: newIds });
+                              void imService.persistConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Reply Mode */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Reply Mode
+                  </label>
+                  <select
+                    value={fsOpenClawConfig.replyMode}
+                    onChange={(e) => {
+                      const update = { replyMode: e.target.value as FeishuOpenClawConfig['replyMode'] };
+                      handleFeishuOpenClawChange(update);
+                      void handleSaveFeishuOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="auto">{i18nService.t('imReplyModeAuto')}</option>
+                    <option value="static">{i18nService.t('imReplyModeStatic')}</option>
+                    <option value="streaming">{i18nService.t('imReplyModeStreaming')}</option>
+                  </select>
+                </div>
+
+                {/* History Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    History Limit
+                  </label>
+                  <input
+                    type="number"
+                    value={fsOpenClawConfig.historyLimit}
+                    onChange={(e) => handleFeishuOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
+                    onBlur={() => handleSaveFeishuOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="200"
+                  />
+                </div>
+
+                {/* Media Max MB */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Media Max (MB)
+                  </label>
+                  <input
+                    type="number"
+                    value={fsOpenClawConfig.mediaMaxMb}
+                    onChange={(e) => handleFeishuOpenClawChange({ mediaMaxMb: parseInt(e.target.value) || 30 })}
+                    onBlur={() => handleSaveFeishuOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="50"
+                  />
+                </div>
+              </div>
+            </details>
+
             <div className="pt-1">
               {renderConnectivityTestButton('feishu')}
             </div>
@@ -681,12 +1862,22 @@ const IMSettings: React.FC = () => {
                 {status.feishu.error}
               </div>
             )}
+
           </div>
         )}
 
         {/* QQ Settings */}
         {activePlatform === 'qq' && (
           <div className="space-y-3">
+            <PlatformGuide
+              steps={[
+                i18nService.t('imQQGuideStep1'),
+                i18nService.t('imQQGuideStep2'),
+                i18nService.t('imQQGuideStep3'),
+                i18nService.t('imQQGuideStep4'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('qq')}
+            />
             {/* AppID */}
             <div className="space-y-1.5">
               <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -695,17 +1886,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.qq.appId}
-                  onChange={(e) => handleQQChange('appId', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={qqOpenClawConfig.appId}
+                  onChange={(e) => handleQQOpenClawChange({ appId: e.target.value })}
+                  onBlur={() => handleSaveQQOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="102xxxxx"
                 />
-                {config.qq.appId && (
+                {qqOpenClawConfig.appId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleQQChange('appId', ''); void imService.updateConfig({ qq: { ...config.qq, appId: '' } }); }}
+                      onClick={() => { handleQQOpenClawChange({ appId: '' }); void imService.persistConfig({ qq: { ...qqOpenClawConfig, appId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -724,17 +1915,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['qq.appSecret'] ? 'text' : 'password'}
-                  value={config.qq.appSecret}
-                  onChange={(e) => handleQQChange('appSecret', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={qqOpenClawConfig.appSecret}
+                  onChange={(e) => handleQQOpenClawChange({ appSecret: e.target.value })}
+                  onBlur={() => handleSaveQQOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.qq.appSecret && (
+                  {qqOpenClawConfig.appSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleQQChange('appSecret', ''); void imService.updateConfig({ qq: { ...config.qq, appSecret: '' } }); }}
+                      onClick={() => { handleQQOpenClawChange({ appSecret: '' }); void imService.persistConfig({ qq: { ...qqOpenClawConfig, appSecret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -751,7 +1942,183 @@ const IMSettings: React.FC = () => {
                   </button>
                 </div>
               </div>
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('imQQCredentialHint')}
+              </p>
             </div>
+
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={qqOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as QQOpenClawConfig['dmPolicy'] };
+                      handleQQOpenClawChange(update);
+                      void handleSaveQQOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {qqOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('qq')}
+
+                {/* Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={allowedUserIdInput}
+                      onChange={(e) => setAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = allowedUserIdInput.trim();
+                          if (id && !qqOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...qqOpenClawConfig.allowFrom, id];
+                            handleQQOpenClawChange({ allowFrom: newIds });
+                            setAllowedUserIdInput('');
+                            void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imQQUserIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = allowedUserIdInput.trim();
+                        if (id && !qqOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...qqOpenClawConfig.allowFrom, id];
+                          handleQQOpenClawChange({ allowFrom: newIds });
+                          setAllowedUserIdInput('');
+                          void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {qqOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {qqOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = qqOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              handleQQOpenClawChange({ allowFrom: newIds });
+                              void imService.persistConfig({ qq: { ...qqOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={qqOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as QQOpenClawConfig['groupPolicy'] };
+                      handleQQOpenClawChange(update);
+                      void handleSaveQQOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">Open</option>
+                    <option value="allowlist">Allowlist</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+
+                {/* History Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    History Limit
+                  </label>
+                  <input
+                    type="number"
+                    value={qqOpenClawConfig.historyLimit}
+                    onChange={(e) => handleQQOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
+                    onBlur={() => handleSaveQQOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="200"
+                  />
+                </div>
+
+                {/* Markdown Support */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Markdown Support
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const update = { markdownSupport: !qqOpenClawConfig.markdownSupport };
+                      handleQQOpenClawChange(update);
+                      void handleSaveQQOpenClawConfig(update);
+                    }}
+                    className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      qqOpenClawConfig.markdownSupport ? 'bg-claude-accent' : 'dark:bg-claude-darkSurface bg-claude-surface'
+                    }`}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      qqOpenClawConfig.markdownSupport ? 'translate-x-4' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* Image Server Base URL */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Image Server Base URL
+                  </label>
+                  <input
+                    type="text"
+                    value={qqOpenClawConfig.imageServerBaseUrl}
+                    onChange={(e) => handleQQOpenClawChange({ imageServerBaseUrl: e.target.value })}
+                    onBlur={() => handleSaveQQOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="http://your-ip:18765"
+                  />
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('imQQImageServerHint')}
+                  </p>
+                </div>
+              </div>
+            </details>
 
             <div className="pt-1">
               {renderConnectivityTestButton('qq')}
@@ -769,6 +2136,15 @@ const IMSettings: React.FC = () => {
         {/* Telegram Settings */}
         {activePlatform === 'telegram' && (
           <div className="space-y-3">
+            <PlatformGuide
+              steps={[
+                i18nService.t('imTelegramGuideStep1'),
+                i18nService.t('imTelegramGuideStep2'),
+                i18nService.t('imTelegramGuideStep3'),
+                i18nService.t('imTelegramGuideStep4'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('telegram')}
+            />
             {/* Bot Token */}
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-claude-textSecondary">
@@ -777,18 +2153,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['telegram.botToken'] ? 'text' : 'password'}
-                  value={config.telegram.botToken}
-                  onChange={(e) => handleTelegramChange('botToken', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  value={tgOpenClawConfig.botToken}
+                  onChange={(e) => handleTelegramOpenClawChange({ botToken: e.target.value })}
+                  onBlur={() => handleSaveTelegramOpenClawConfig()}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.telegram.botToken && (
+                  {tgOpenClawConfig.botToken && (
                     <button
                       type="button"
-                      onClick={() => { handleTelegramChange('botToken', ''); void imService.updateConfig({ telegram: { ...config.telegram, botToken: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleTelegramOpenClawChange({ botToken: '' }); void imService.persistConfig({ telegram: { ...tgOpenClawConfig, botToken: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -804,103 +2180,291 @@ const IMSettings: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-claude-textSecondary">
-                {i18nService.t('telegramTokenHint') || '从 @BotFather 获取 Bot Token'}
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('imTelegramTokenHint')}
               </p>
             </div>
 
-            {/* Allowed User IDs */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-claude-textSecondary">
-                Allowed User IDs
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={allowedUserIdInput}
-                  onChange={(e) => setAllowedUserIdInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      const id = allowedUserIdInput.trim();
-                      if (id && !(config.telegram.allowedUserIds || []).includes(id)) {
-                        const newIds = [...(config.telegram.allowedUserIds || []), id];
-                        handleTelegramChange('allowedUserIds', newIds);
-                        setAllowedUserIdInput('');
-                        void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
-                      }
-                    }
-                  }}
-                  className="block flex-1 rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 text-sm transition-colors"
-                  placeholder={i18nService.t('telegramAllowedUserIdsPlaceholder') || '输入 Telegram User ID'}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = allowedUserIdInput.trim();
-                    if (id && !(config.telegram.allowedUserIds || []).includes(id)) {
-                      const newIds = [...(config.telegram.allowedUserIds || []), id];
-                      handleTelegramChange('allowedUserIds', newIds);
-                      setAllowedUserIdInput('');
-                      void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
-                    }
-                  }}
-                  className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
-                >
-                  {i18nService.t('add') || '添加'}
-                </button>
-              </div>
-              {(config.telegram.allowedUserIds || []).length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {(config.telegram.allowedUserIds || []).map((id) => (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-claude-surface/80 border-claude-border/60 border text-claude-text"
-                    >
-                      {id}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const newIds = (config.telegram.allowedUserIds || []).filter((uid) => uid !== id);
-                          handleTelegramChange('allowedUserIds', newIds);
-                          void imService.updateConfig({ telegram: { ...config.telegram, allowedUserIds: newIds } });
-                        }}
-                        className="text-claude-textSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                      >
-                        <XMarkIcon className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={tgOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as TelegramOpenClawConfig['dmPolicy'] };
+                      handleTelegramOpenClawChange(update);
+                      void handleSaveTelegramOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
+                  </select>
                 </div>
-              )}
-              <p className="text-xs text-claude-textSecondary">
-                {i18nService.t('telegramAllowedUserIdsHint') || '限制只有白名单中的用户可以与 Bot 交互。留空则允许所有用户。'}
-              </p>
-            </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {tgOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('telegram')}
+
+                {/* Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={allowedUserIdInput}
+                      onChange={(e) => setAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = allowedUserIdInput.trim();
+                          if (id && !tgOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...tgOpenClawConfig.allowFrom, id];
+                            handleTelegramOpenClawChange({ allowFrom: newIds });
+                            setAllowedUserIdInput('');
+                            void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imTelegramUserIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = allowedUserIdInput.trim();
+                        if (id && !tgOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...tgOpenClawConfig.allowFrom, id];
+                          handleTelegramOpenClawChange({ allowFrom: newIds });
+                          setAllowedUserIdInput('');
+                          void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {tgOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {tgOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = tgOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              handleTelegramOpenClawChange({ allowFrom: newIds });
+                              void imService.persistConfig({ telegram: { ...tgOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Streaming Mode */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Streaming
+                  </label>
+                  <select
+                    value={tgOpenClawConfig.streaming}
+                    onChange={(e) => {
+                      const update = { streaming: e.target.value as TelegramOpenClawConfig['streaming'] };
+                      handleTelegramOpenClawChange(update);
+                      void handleSaveTelegramOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="off">Off</option>
+                    <option value="partial">Partial</option>
+                    <option value="block">Block</option>
+                    <option value="progress">Progress</option>
+                  </select>
+                </div>
+
+                {/* Proxy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Proxy
+                  </label>
+                  <input
+                    type="text"
+                    value={tgOpenClawConfig.proxy}
+                    onChange={(e) => handleTelegramOpenClawChange({ proxy: e.target.value })}
+                    onBlur={() => handleSaveTelegramOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="socks5://localhost:9050"
+                  />
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={tgOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as TelegramOpenClawConfig['groupPolicy'] };
+                      handleTelegramOpenClawChange(update);
+                      void handleSaveTelegramOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="allowlist">Allowlist</option>
+                    <option value="open">Open</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+
+                {/* Reply-to Mode */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Reply-to Mode
+                  </label>
+                  <select
+                    value={tgOpenClawConfig.replyToMode}
+                    onChange={(e) => {
+                      const update = { replyToMode: e.target.value as TelegramOpenClawConfig['replyToMode'] };
+                      handleTelegramOpenClawChange(update);
+                      void handleSaveTelegramOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="off">Off</option>
+                    <option value="first">First</option>
+                    <option value="all">All</option>
+                  </select>
+                </div>
+
+                {/* History Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    History Limit
+                  </label>
+                  <input
+                    type="number"
+                    value={tgOpenClawConfig.historyLimit}
+                    onChange={(e) => handleTelegramOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
+                    onBlur={() => handleSaveTelegramOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="200"
+                  />
+                </div>
+
+                {/* Media Max MB */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Media Max (MB)
+                  </label>
+                  <input
+                    type="number"
+                    value={tgOpenClawConfig.mediaMaxMb}
+                    onChange={(e) => handleTelegramOpenClawChange({ mediaMaxMb: parseInt(e.target.value) || 5 })}
+                    onBlur={() => handleSaveTelegramOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="50"
+                  />
+                </div>
+
+                {/* Link Preview */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Link Preview
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const update = { linkPreview: !tgOpenClawConfig.linkPreview };
+                      handleTelegramOpenClawChange(update);
+                      void handleSaveTelegramOpenClawConfig(update);
+                    }}
+                    className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      tgOpenClawConfig.linkPreview ? 'bg-claude-accent' : 'dark:bg-claude-darkSurface bg-claude-surface'
+                    }`}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      tgOpenClawConfig.linkPreview ? 'translate-x-4' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* Webhook URL */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Webhook URL
+                  </label>
+                  <input
+                    type="text"
+                    value={tgOpenClawConfig.webhookUrl}
+                    onChange={(e) => handleTelegramOpenClawChange({ webhookUrl: e.target.value })}
+                    onBlur={() => handleSaveTelegramOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="https://example.com/telegram-webhook"
+                  />
+                </div>
+
+                {/* Webhook Secret */}
+                {tgOpenClawConfig.webhookUrl && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                      Webhook Secret
+                    </label>
+                    <input
+                      type="password"
+                      value={tgOpenClawConfig.webhookSecret}
+                      onChange={(e) => handleTelegramOpenClawChange({ webhookSecret: e.target.value })}
+                      onBlur={() => handleSaveTelegramOpenClawConfig()}
+                      className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder="webhook-secret"
+                    />
+                  </div>
+                )}
+              </div>
+            </details>
 
             <div className="pt-1">
               {renderConnectivityTestButton('telegram')}
             </div>
-
-            {/* Bot username display */}
-            {status.telegram.botUsername && (
-              <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
-                Bot: @{status.telegram.botUsername}
-              </div>
-            )}
-
-            {/* Error display */}
-            {status.telegram.lastError && (
-              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {status.telegram.lastError}
-              </div>
-            )}
           </div>
         )}
 
         {/* Discord Settings */}
         {activePlatform === 'discord' && (
           <div className="space-y-3">
+            <PlatformGuide
+              steps={[
+                i18nService.t('imDiscordGuideStep1'),
+                i18nService.t('imDiscordGuideStep2'),
+                i18nService.t('imDiscordGuideStep3'),
+                i18nService.t('imDiscordGuideStep4'),
+                i18nService.t('imDiscordGuideStep5'),
+                i18nService.t('imDiscordGuideStep6'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('discord')}
+            />
             {/* Bot Token */}
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-claude-textSecondary">
@@ -909,18 +2473,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['discord.botToken'] ? 'text' : 'password'}
-                  value={config.discord.botToken}
-                  onChange={(e) => handleDiscordChange('botToken', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                  value={dcOpenClawConfig.botToken}
+                  onChange={(e) => handleDiscordOpenClawChange({ botToken: e.target.value })}
+                  onBlur={() => handleSaveDiscordOpenClawConfig()}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4OQ..."
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.discord.botToken && (
+                  {dcOpenClawConfig.botToken && (
                     <button
                       type="button"
-                      onClick={() => { handleDiscordChange('botToken', ''); void imService.updateConfig({ discord: { ...config.discord, botToken: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleDiscordOpenClawChange({ botToken: '' }); void imService.persistConfig({ discord: { ...dcOpenClawConfig, botToken: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -936,10 +2500,268 @@ const IMSettings: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-claude-textSecondary">
-                从 Discord Developer Portal 获取 Bot Token
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('imDiscordTokenHint')}
               </p>
             </div>
+
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={dcOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as DiscordOpenClawConfig['dmPolicy'] };
+                      handleDiscordOpenClawChange(update);
+                      void handleSaveDiscordOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {dcOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('discord')}
+
+                {/* Allow From (User IDs) */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={discordAllowedUserIdInput}
+                      onChange={(e) => setDiscordAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = discordAllowedUserIdInput.trim();
+                          if (id && !dcOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...dcOpenClawConfig.allowFrom, id];
+                            handleDiscordOpenClawChange({ allowFrom: newIds });
+                            setDiscordAllowedUserIdInput('');
+                            void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imDiscordUserIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = discordAllowedUserIdInput.trim();
+                        if (id && !dcOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...dcOpenClawConfig.allowFrom, id];
+                          handleDiscordOpenClawChange({ allowFrom: newIds });
+                          setDiscordAllowedUserIdInput('');
+                          void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {dcOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {dcOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = dcOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              handleDiscordOpenClawChange({ allowFrom: newIds });
+                              void imService.persistConfig({ discord: { ...dcOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 transition-colors"
+                          >
+                            <XMarkIcon className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Streaming */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Streaming
+                  </label>
+                  <select
+                    value={dcOpenClawConfig.streaming}
+                    onChange={(e) => {
+                      const update = { streaming: e.target.value as DiscordOpenClawConfig['streaming'] };
+                      handleDiscordOpenClawChange(update);
+                      void handleSaveDiscordOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="off">Off</option>
+                    <option value="partial">Partial</option>
+                    <option value="block">Block</option>
+                    <option value="progress">Progress</option>
+                  </select>
+                </div>
+
+                {/* Proxy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Proxy
+                  </label>
+                  <input
+                    type="text"
+                    value={dcOpenClawConfig.proxy}
+                    onChange={(e) => handleDiscordOpenClawChange({ proxy: e.target.value })}
+                    onBlur={() => handleSaveDiscordOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="http://proxy:port"
+                  />
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={dcOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as DiscordOpenClawConfig['groupPolicy'] };
+                      handleDiscordOpenClawChange(update);
+                      void handleSaveDiscordOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="allowlist">{i18nService.t('imGroupPolicyAllowlist')}</option>
+                    <option value="open">{i18nService.t('imGroupPolicyOpen')}</option>
+                    <option value="disabled">{i18nService.t('imGroupPolicyDisabled')}</option>
+                  </select>
+                </div>
+
+                {/* Group Allow From (Server IDs) */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Allow From (Server IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={discordServerAllowIdInput}
+                      onChange={(e) => setDiscordServerAllowIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = discordServerAllowIdInput.trim();
+                          if (id && !dcOpenClawConfig.groupAllowFrom.includes(id)) {
+                            const newIds = [...dcOpenClawConfig.groupAllowFrom, id];
+                            handleDiscordOpenClawChange({ groupAllowFrom: newIds });
+                            setDiscordServerAllowIdInput('');
+                            void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imDiscordServerIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = discordServerAllowIdInput.trim();
+                        if (id && !dcOpenClawConfig.groupAllowFrom.includes(id)) {
+                          const newIds = [...dcOpenClawConfig.groupAllowFrom, id];
+                          handleDiscordOpenClawChange({ groupAllowFrom: newIds });
+                          setDiscordServerAllowIdInput('');
+                          void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {dcOpenClawConfig.groupAllowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {dcOpenClawConfig.groupAllowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = dcOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
+                              handleDiscordOpenClawChange({ groupAllowFrom: newIds });
+                              void imService.persistConfig({ discord: { ...dcOpenClawConfig, groupAllowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 transition-colors"
+                          >
+                            <XMarkIcon className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* History Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    History Limit
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={dcOpenClawConfig.historyLimit}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 50;
+                      handleDiscordOpenClawChange({ historyLimit: val });
+                    }}
+                    onBlur={() => handleSaveDiscordOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+
+                {/* Media Max MB */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Media Max MB
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={dcOpenClawConfig.mediaMaxMb}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 25;
+                      handleDiscordOpenClawChange({ mediaMaxMb: val });
+                    }}
+                    onBlur={() => handleSaveDiscordOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+              </div>
+            </details>
 
             <div className="pt-1">
               {renderConnectivityTestButton('discord')}
@@ -964,243 +2786,65 @@ const IMSettings: React.FC = () => {
         {/* NIM (NetEase IM) Settings */}
         {activePlatform === 'nim' && (
           <div className="space-y-3">
-            {/* How to get NIM credentials */}
-            <div className="mb-3 p-3 rounded-lg bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/30">
-              <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
-                {i18nService.t('nimCredentialsGuide') || '如何获取云信凭证：'}
-              </p>
-              <ol className="mt-2 text-xs text-blue-600 dark:text-blue-400 space-y-1 list-decimal list-inside">
-                <li>{i18nService.t('nimGuideStep1') || '登录网易云信控制台（yunxin.163.com）'}</li>
-                <li>{i18nService.t('nimGuideStep2') || '创建或选择应用，获取 App Key'}</li>
-                <li>{i18nService.t('nimGuideStep3') || '在"账号数-子功能配置"中创建 IM 账号（accid）'}</li>
-                <li>{i18nService.t('nimGuideStep4') || '为该账号生成 Token（密码）- 建议长期有效'}</li>
-              </ol>
-            </div>
+            <PlatformGuide
+              title={i18nService.t('nimCredentialsGuide')}
+              steps={[
+                i18nService.t('nimGuideStep1'),
+                i18nService.t('nimGuideStep2'),
+                i18nService.t('nimGuideStep3'),
+                i18nService.t('nimGuideStep4'),
+              ]}
+            />
 
-            {/* App Key */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-claude-textSecondary">
-                App Key
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={config.nim.appKey}
-                  onChange={(e) => handleNimChange('appKey', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="your_app_key"
-                />
-                {config.nim.appKey && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('appKey', ''); void imService.updateConfig({ nim: { ...config.nim, appKey: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-claude-textSecondary">
-                {i18nService.t('nimAppKeyHint') || '从云信控制台应用信息中获取'}
-              </p>
-            </div>
-
-            {/* Account */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-claude-textSecondary">
-                Account (accid)
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={config.nim.account}
-                  onChange={(e) => handleNimChange('account', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder={i18nService.t('nimAccountPlaceholder') || 'bot_account_id'}
-                />
-                {config.nim.account && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('account', ''); void imService.updateConfig({ nim: { ...config.nim, account: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-claude-textSecondary">
-                {i18nService.t('nimAccountHint') || '在云信控制台"账号管理"中创建的 IM 账号 ID'}
-              </p>
-            </div>
-
-            {/* Token */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-claude-textSecondary">
-                Token
-              </label>
-              <div className="relative">
-                <input
-                  type={showSecrets['nim.token'] ? 'text' : 'password'}
-                  value={config.nim.token}
-                  onChange={(e) => handleNimChange('token', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
-                  placeholder="••••••••••••"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.nim.token && (
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('token', ''); void imService.updateConfig({ nim: { ...config.nim, token: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'nim.token': !prev['nim.token'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
-                    title={showSecrets['nim.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['nim.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
+            {nimSchemaData ? (
+              <SchemaForm
+                schema={nimSchemaData.schema}
+                hints={nimSchemaData.hints}
+                value={config.nim as unknown as Record<string, unknown>}
+                onChange={(path, value) => {
+                  const updated = deepSet({ ...config.nim } as unknown as Record<string, unknown>, path, value);
+                  dispatch(setNimConfig(updated as any));
+                }}
+                onBlur={handleSaveConfig}
+                showSecrets={showSecrets}
+                onToggleSecret={(path) => setShowSecrets(prev => ({ ...prev, [path]: !prev[path] }))}
+              />
+            ) : (
+              /* Fallback: minimal credential inputs when schema not yet loaded */
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">App Key</label>
+                  <input
+                    type="text"
+                    value={config.nim.appKey}
+                    onChange={(e) => dispatch(setNimConfig({ appKey: e.target.value }))}
+                    onBlur={handleSaveConfig}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="your_app_key"
+                  />
                 </div>
-              </div>
-              <p className="text-xs text-claude-textSecondary">
-                {i18nService.t('nimTokenHint') || '为该账号生成的访问凭证（建议设置为长期有效）'}
-              </p>
-            </div>
-
-            {/* Account Whitelist */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-claude-textSecondary">
-                {i18nService.t('nimAccountWhitelist') || '白名单账号'}
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={config.nim.accountWhitelist}
-                  onChange={(e) => handleNimChange('accountWhitelist', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder="account1,account2"
-                />
-                {config.nim.accountWhitelist && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => { handleNimChange('accountWhitelist', ''); void imService.updateConfig({ nim: { ...config.nim, accountWhitelist: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-claude-textSecondary">
-                {i18nService.t('nimAccountWhitelistHint') || '填写允许与机器人对话的云信账号，多个账号用逗号分隔。留空则不限制，响应所有账号的消息。'}
-              </p>
-            </div>
-
-            {/* Team Policy (群消息策略) */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                {i18nService.t('nimTeamPolicy') || '群消息策略'}
-              </label>
-              <select
-                value={config.nim.teamPolicy || 'disabled'}
-                onChange={(e) => {
-                  const newValue = e.target.value as 'disabled' | 'open' | 'allowlist';
-                  handleNimChange('teamPolicy', newValue);
-                  saveNimConfigWithUpdate({ teamPolicy: newValue });
-                }}
-                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-              >
-                <option value="disabled">{i18nService.t('nimTeamPolicyDisabled') || '禁用 - 不响应群消息'}</option>
-                <option value="open">{i18nService.t('nimTeamPolicyOpen') || '开放 - 响应所有群的@消息'}</option>
-                <option value="allowlist">{i18nService.t('nimTeamPolicyAllowlist') || '白名单 - 仅响应指定群的@消息'}</option>
-              </select>
-              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                {i18nService.t('nimTeamPolicyHint') || '群消息仅响应@机器人的消息'}
-              </p>
-            </div>
-
-            {/* Team Allowlist - only show when policy is 'allowlist' */}
-            {config.nim.teamPolicy === 'allowlist' && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('nimTeamAllowlist') || '群白名单'}
-                </label>
-                <input
-                  type="text"
-                  value={config.nim.teamAllowlist || ''}
-                  onChange={(e) => handleNimChange('teamAllowlist', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                  placeholder="team_id_1,team_id_2"
-                />
-                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                  {i18nService.t('nimTeamAllowlistHint') || '填写允许响应的群ID，多个用逗号分隔'}
-                </p>
-              </div>
-            )}
-
-            {/* QChat Enable Toggle */}
-            <div className="flex items-center justify-between py-2">
-              <div>
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('nimQChatEnabled') || '启用圈组 (QChat)'}
-                </label>
-                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary mt-0.5">
-                  {i18nService.t('nimQChatEnabledHint') || '订阅圈组消息，仅响应@机器人的消息'}
-                </p>
-              </div>
-              <div
-                className={`w-10 h-5 rounded-full flex items-center transition-colors cursor-pointer ${
-                  config.nim.qchatEnabled ? 'bg-green-500' : 'dark:bg-claude-darkBorder bg-claude-border'
-                }`}
-                onClick={() => {
-                  const newValue = !config.nim.qchatEnabled;
-                  handleNimChange('qchatEnabled', newValue);
-                  saveNimConfigWithUpdate({ qchatEnabled: newValue });
-                }}
-              >
-                <div
-                  className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${
-                    config.nim.qchatEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                  }`}
-                />
-              </div>
-            </div>
-
-            {/* QChat Server IDs - only show when QChat is enabled */}
-            {config.nim.qchatEnabled && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                  {i18nService.t('nimQChatServerIds') || '圈组服务器 ID'}
-                </label>
-                <input
-                  type="text"
-                  value={config.nim.qchatServerIds || ''}
-                  onChange={(e) => handleNimChange('qchatServerIds', e.target.value)}
-                  onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
-                  placeholder={i18nService.t('nimQChatServerIdsPlaceholder') || '留空自动发现所有已加入的服务器'}
-                />
-                <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
-                  {i18nService.t('nimQChatServerIdsHint') || '指定要订阅的服务器 ID，多个用逗号分隔。留空则自动订阅所有已加入的服务器。'}
-                </p>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Account</label>
+                  <input
+                    type="text"
+                    value={config.nim.account}
+                    onChange={(e) => dispatch(setNimConfig({ account: e.target.value }))}
+                    onBlur={handleSaveConfig}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="bot_account_id"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Token</label>
+                  <input
+                    type="password"
+                    value={config.nim.token}
+                    onChange={(e) => dispatch(setNimConfig({ token: e.target.value }))}
+                    onBlur={handleSaveConfig}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    placeholder="••••••••••••"
+                  />
+                </div>
               </div>
             )}
 
@@ -1208,24 +2852,22 @@ const IMSettings: React.FC = () => {
               {renderConnectivityTestButton('nim')}
             </div>
 
-            {/* Bot account display */}
             {status.nim.botAccount && (
               <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
                 Account: {status.nim.botAccount}
               </div>
             )}
 
-            {/* Error display */}
             {status.nim.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {status.nim.lastError}
+                {translateIMError(status.nim.lastError)}
               </div>
             )}
           </div>
         )}
 
         {/* 小蜜蜂设置*/}
-        {activePlatform === 'xiaomifeng' && (
+        {activePlatform === 'netease-bee' && (
           <div className="space-y-3">
             {/* Client ID */}
             <div className="space-y-1.5">
@@ -1235,18 +2877,18 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.xiaomifeng.clientId}
-                  onChange={(e) => handleXiaomifengChange('clientId', e.target.value)}
+                  value={config['netease-bee'].clientId}
+                  onChange={(e) => handleNeteaseBeeChanChange('clientId', e.target.value)}
                   onBlur={handleSaveConfig}
-                  className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder={i18nService.t('xiaomifengClientIdPlaceholder') || '您的Client ID'}
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                  placeholder={i18nService.t('neteaseBeeChanClientIdPlaceholder') || '您的Client ID'}
                 />
-                {config.xiaomifeng.clientId && (
+                {config['netease-bee'].clientId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleXiaomifengChange('clientId', ''); void imService.updateConfig({ xiaomifeng: { ...config.xiaomifeng, clientId: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleNeteaseBeeChanChange('clientId', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], clientId: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1263,19 +2905,19 @@ const IMSettings: React.FC = () => {
               </label>
               <div className="relative">
                 <input
-                  type={showSecrets['xiaomifeng.secret'] ? 'text' : 'password'}
-                  value={config.xiaomifeng.secret}
-                  onChange={(e) => handleXiaomifengChange('secret', e.target.value)}
+                  type={showSecrets['netease-bee.secret'] ? 'text' : 'password'}
+                  value={config['netease-bee'].secret}
+                  onChange={(e) => handleNeteaseBeeChanChange('secret', e.target.value)}
                   onBlur={handleSaveConfig}
                   className="block w-full rounded-lg bg-claude-surface/80 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.xiaomifeng.secret && (
+                  {config['netease-bee'].secret && (
                     <button
                       type="button"
-                      onClick={() => { handleXiaomifengChange('secret', ''); void imService.updateConfig({ xiaomifeng: { ...config.xiaomifeng, secret: '' } }); }}
-                      className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
+                      onClick={() => { handleNeteaseBeeChanChange('secret', ''); void imService.persistConfig({ 'netease-bee': { ...config['netease-bee'], secret: '' } }); }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
                       <XCircleIconSolid className="h-4 w-4" />
@@ -1283,31 +2925,115 @@ const IMSettings: React.FC = () => {
                   )}
                   <button
                     type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'xiaomifeng.secret': !prev['xiaomifeng.secret'] }))}
-                    className="p-0.5 rounded text-claude-textSecondary hover:text-claude-accent transition-colors"
-                    title={showSecrets['xiaomifeng.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                    onClick={() => setShowSecrets(prev => ({ ...prev, 'netease-bee.secret': !prev['netease-bee.secret'] }))}
+                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    title={showSecrets['netease-bee.secret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
                   >
-                    {showSecrets['xiaomifeng.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                    {showSecrets['netease-bee.secret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="pt-1">
-              {renderConnectivityTestButton('xiaomifeng')}
+              {renderConnectivityTestButton('netease-bee')}
             </div>
 
             {/* Bot account display */}
-            {status.xiaomifeng?.botAccount && (
+            {status['netease-bee']?.botAccount && (
               <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
-                Account: {status.xiaomifeng.botAccount}
+                Account: {status['netease-bee'].botAccount}
               </div>
             )}
 
             {/* Error display */}
-            {status.xiaomifeng?.lastError && (
+            {status['netease-bee']?.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
-                {translateIMError(status.xiaomifeng.lastError)}
+                {translateIMError(status['netease-bee'].lastError)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Weixin (微信) Settings */}
+        {activePlatform === 'weixin' && (
+          <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60 p-4 text-center space-y-3">
+              {(weixinQrStatus === 'idle' || weixinQrStatus === 'error') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleWeixinQrLogin()}
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('imWeixinScanBtn')}
+                  </button>
+                  <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('imWeixinScanHint')}
+                  </p>
+                  {weixinQrStatus === 'error' && weixinQrError && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                      {weixinQrError}
+                    </div>
+                  )}
+                </>
+              )}
+              {weixinQrStatus === 'loading' && (
+                <div className="flex items-center justify-center gap-2 py-4">
+                  <ArrowPathIcon className="h-5 w-5 animate-spin text-claude-accent" />
+                  <span className="text-sm text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('imWeixinQrLoading')}
+                  </span>
+                </div>
+              )}
+              {(weixinQrStatus === 'showing' || weixinQrStatus === 'waiting') && weixinQrUrl && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('imWeixinQrScanPrompt')}
+                  </p>
+                  <div className="flex justify-center">
+                    <div className="p-3 bg-white rounded-lg border dark:border-claude-darkBorder/40 border-claude-border/40">
+                      <QRCodeSVG value={weixinQrUrl} size={192} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {weixinQrStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('imWeixinQrSuccess')}
+                </div>
+              )}
+            </div>
+
+            {/* Platform Guide */}
+            <PlatformGuide
+              steps={[
+                i18nService.t('imWeixinGuideStep1'),
+                i18nService.t('imWeixinGuideStep2'),
+                i18nService.t('imWeixinGuideStep3'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('weixin')}
+            />
+
+            {/* Connectivity test */}
+            <div className="pt-1">
+              {renderConnectivityTestButton('weixin')}
+            </div>
+
+            {/* Account ID display */}
+            {weixinOpenClawConfig.accountId && (
+              <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                Account ID: {weixinOpenClawConfig.accountId}
+              </div>
+            )}
+
+            {/* Error display */}
+            {status.weixin?.lastError && (
+              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                {status.weixin.lastError}
               </div>
             )}
           </div>
@@ -1316,6 +3042,53 @@ const IMSettings: React.FC = () => {
         {/* WeCom (企业微信) Settings */}
         {activePlatform === 'wecom' && (
           <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed dark:border-claude-darkBorder/60 border-claude-border/60 p-4 text-center space-y-2">
+              <button
+                type="button"
+                disabled={wecomQuickSetupStatus === 'pending'}
+                onClick={handleWecomQuickSetup}
+                className="px-4 py-2.5 rounded-lg text-sm font-medium bg-claude-accent text-white hover:bg-claude-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {wecomQuickSetupStatus === 'pending'
+                  ? i18nService.t('imWecomQuickSetupPending')
+                  : i18nService.t('imWecomScanBtn')}
+              </button>
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('imWecomScanHint')}
+              </p>
+              {wecomQuickSetupStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('imWecomQuickSetupSuccess')}
+                </div>
+              )}
+              {wecomQuickSetupStatus === 'error' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                  <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('imWecomQuickSetupError')}: {wecomQuickSetupError}
+                </div>
+              )}
+            </div>
+
+            {/* Divider with "or manually enter" */}
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+              <span className="px-3 text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary whitespace-nowrap">
+                {i18nService.t('imWecomOrManual')}
+              </span>
+              <div className="flex-1 border-t dark:border-claude-darkBorder/40 border-claude-border/40" />
+            </div>
+
+            {/* Manual input section */}
+            <PlatformGuide
+              steps={[
+                i18nService.t('imWecomGuideStep1'),
+                i18nService.t('imWecomGuideStep2'),
+                i18nService.t('imWecomGuideStep3'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('wecom')}
+            />
             {/* Bot ID */}
             <div className="space-y-1.5">
               <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
@@ -1324,17 +3097,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.wecom.botId}
-                  onChange={(e) => handleWecomChange('botId', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={wecomOpenClawConfig.botId}
+                  onChange={(e) => handleWecomOpenClawChange({ botId: e.target.value })}
+                  onBlur={() => handleSaveWecomOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
-                  placeholder={i18nService.t('wecomBotIdPlaceholder') || '您的 Bot ID'}
+                  placeholder={i18nService.t('imWecomBotIdPlaceholder')}
                 />
-                {config.wecom.botId && (
+                {wecomOpenClawConfig.botId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleWecomChange('botId', ''); void imService.updateConfig({ wecom: { ...config.wecom, botId: '' } }); }}
+                      onClick={() => { handleWecomOpenClawChange({ botId: '' }); void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, botId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1353,17 +3126,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['wecom.secret'] ? 'text' : 'password'}
-                  value={config.wecom.secret}
-                  onChange={(e) => handleWecomChange('secret', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={wecomOpenClawConfig.secret}
+                  onChange={(e) => handleWecomOpenClawChange({ secret: e.target.value })}
+                  onBlur={() => handleSaveWecomOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.wecom.secret && (
+                  {wecomOpenClawConfig.secret && (
                     <button
                       type="button"
-                      onClick={() => { handleWecomChange('secret', ''); void imService.updateConfig({ wecom: { ...config.wecom, secret: '' } }); }}
+                      onClick={() => { handleWecomOpenClawChange({ secret: '' }); void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, secret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -1380,8 +3153,152 @@ const IMSettings: React.FC = () => {
                   </button>
                 </div>
               </div>
+              <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                {i18nService.t('imWecomCredentialHint')}
+              </p>
             </div>
 
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={wecomOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as WecomOpenClawConfig['dmPolicy'] };
+                      handleWecomOpenClawChange(update);
+                      void handleSaveWecomOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {wecomOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('wecom')}
+
+                {/* Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={allowedUserIdInput}
+                      onChange={(e) => setAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = allowedUserIdInput.trim();
+                          if (id && !wecomOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...wecomOpenClawConfig.allowFrom, id];
+                            handleWecomOpenClawChange({ allowFrom: newIds });
+                            setAllowedUserIdInput('');
+                            void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('imWecomUserIdPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = allowedUserIdInput.trim();
+                        if (id && !wecomOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...wecomOpenClawConfig.allowFrom, id];
+                          handleWecomOpenClawChange({ allowFrom: newIds });
+                          setAllowedUserIdInput('');
+                          void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {wecomOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {wecomOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = wecomOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              handleWecomOpenClawChange({ allowFrom: newIds });
+                              void imService.persistConfig({ wecom: { ...wecomOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={wecomOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as WecomOpenClawConfig['groupPolicy'] };
+                      handleWecomOpenClawChange(update);
+                      void handleSaveWecomOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">Open</option>
+                    <option value="allowlist">Allowlist</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+
+                {/* Send Thinking Message */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('imSendThinkingMessage')}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const update = { sendThinkingMessage: !wecomOpenClawConfig.sendThinkingMessage };
+                      handleWecomOpenClawChange(update);
+                      void handleSaveWecomOpenClawConfig(update);
+                    }}
+                    className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      wecomOpenClawConfig.sendThinkingMessage ? 'bg-claude-accent' : 'dark:bg-claude-darkSurface bg-claude-surface'
+                    }`}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      wecomOpenClawConfig.sendThinkingMessage ? 'translate-x-4' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+            </details>
+
+            {/* Connectivity test */}
             <div className="pt-1">
               {renderConnectivityTestButton('wecom')}
             </div>
@@ -1397,6 +3314,479 @@ const IMSettings: React.FC = () => {
             {status.wecom?.lastError && (
               <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
                 {status.wecom.lastError}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activePlatform === 'popo' && (
+          <div className="space-y-3">
+            {/* Platform Guide */}
+            <PlatformGuide
+              steps={[
+                i18nService.t('imPopoGuideStep1'),
+                i18nService.t('imPopoGuideStep2'),
+                i18nService.t('imPopoGuideStep3'),
+              ]}
+                guideUrl={PlatformRegistry.guideUrl('popo')}
+            />
+
+            {/* Connection Mode selector */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                {i18nService.t('imPopoConnectionMode')}
+              </label>
+              <select
+                value={popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')}
+                onChange={(e) => {
+                  const update = { connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'] };
+                  handlePopoChange(update);
+                  void handleSavePopoConfig(update);
+                }}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+              >
+                <option value="websocket">{i18nService.t('imPopoConnectionModeWebsocket')}</option>
+                <option value="webhook">{i18nService.t('imPopoConnectionModeWebhook')}</option>
+              </select>
+            </div>
+
+            {/* Credential hint */}
+            <p className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+              {i18nService.t('imPopoCredentialHint')}
+            </p>
+
+            {/* AppKey input */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">AppKey</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={popoConfig.appKey}
+                  onChange={(e) => handlePopoChange({ appKey: e.target.value })}
+                  onBlur={() => void handleSavePopoConfig()}
+                  placeholder="AppKey"
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
+                />
+                {popoConfig.appKey && (
+                  <div className="absolute right-2 inset-y-0 flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handlePopoChange({ appKey: '' });
+                        void handleSavePopoConfig({ appKey: '' });
+                      }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* AppSecret input */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">AppSecret</label>
+              <div className="relative">
+                <input
+                  type={showSecrets['popo.appSecret'] ? 'text' : 'password'}
+                  value={popoConfig.appSecret}
+                  onChange={(e) => handlePopoChange({ appSecret: e.target.value })}
+                  onBlur={() => void handleSavePopoConfig()}
+                  placeholder="••••••••••••"
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                />
+                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                  {popoConfig.appSecret && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handlePopoChange({ appSecret: '' });
+                        void handleSavePopoConfig({ appSecret: '' });
+                      }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.appSecret': !prev['popo.appSecret'] }))}
+                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    title={showSecrets['popo.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                  >
+                    {showSecrets['popo.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Token input (webhook mode only) */}
+            {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Token</label>
+              <div className="relative">
+                <input
+                  type={showSecrets['popo.token'] ? 'text' : 'password'}
+                  value={popoConfig.token}
+                  onChange={(e) => handlePopoChange({ token: e.target.value })}
+                  onBlur={() => void handleSavePopoConfig()}
+                  placeholder="••••••••••••"
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                />
+                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                  {popoConfig.token && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handlePopoChange({ token: '' });
+                        void handleSavePopoConfig({ token: '' });
+                      }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.token': !prev['popo.token'] }))}
+                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    title={showSecrets['popo.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                  >
+                    {showSecrets['popo.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+            )}
+
+            {/* AES Key input */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">AES Key</label>
+              <div className="relative">
+                <input
+                  type={showSecrets['popo.aesKey'] ? 'text' : 'password'}
+                  value={popoConfig.aesKey}
+                  onChange={(e) => handlePopoChange({ aesKey: e.target.value })}
+                  onBlur={() => void handleSavePopoConfig()}
+                  placeholder="••••••••••••"
+                  className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
+                />
+                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                  {popoConfig.aesKey && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handlePopoChange({ aesKey: '' });
+                        void handleSavePopoConfig({ aesKey: '' });
+                      }}
+                      className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                      title={i18nService.t('clear') || 'Clear'}
+                    >
+                      <XCircleIconSolid className="h-4 w-4" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.aesKey': !prev['popo.aesKey'] }))}
+                    className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                    title={showSecrets['popo.aesKey'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                  >
+                    {showSecrets['popo.aesKey'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+              {popoConfig.aesKey && popoConfig.aesKey.length !== 32 && (
+                <p className="text-xs text-amber-500">AES Key {i18nService.t('lang') === 'zh' ? '需要为 32 个字符' : 'must be 32 characters'}（{i18nService.t('lang') === 'zh' ? '当前' : 'current'} {popoConfig.aesKey.length}）</p>
+              )}
+            </div>
+
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                {i18nService.t('imAdvancedSettings')}
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* Webhook fields (webhook mode only) */}
+                {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
+                <>
+                {/* Webhook Base URL */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Webhook Base URL</label>
+                  <input
+                    type="text"
+                    value={popoConfig.webhookBaseUrl}
+                    onChange={(e) => handlePopoChange({ webhookBaseUrl: e.target.value })}
+                    onBlur={() => void handleSavePopoConfig()}
+                    placeholder={localIp ? `http://${localIp}` : (i18nService.t('lang') === 'zh' ? '外部域名（可选，不填则自动检测本机 IP）' : 'External domain (optional, auto-detects local IP)')}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+
+                {/* Webhook Path */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Webhook Path</label>
+                  <input
+                    type="text"
+                    value={popoConfig.webhookPath}
+                    onChange={(e) => handlePopoChange({ webhookPath: e.target.value })}
+                    onBlur={() => void handleSavePopoConfig()}
+                    placeholder="/popo/callback"
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+
+                {/* Webhook Port */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Webhook Port</label>
+                  <input
+                    type="number"
+                    value={popoConfig.webhookPort}
+                    onChange={(e) => handlePopoChange({ webhookPort: parseInt(e.target.value) || 3100 })}
+                    onBlur={() => void handleSavePopoConfig()}
+                    placeholder="3100"
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+                </>
+                )}
+
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={popoConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as PopoOpenClawConfig['dmPolicy'] };
+                      handlePopoChange(update);
+                      void handleSavePopoConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">{i18nService.t('imDmPolicyOpen')}</option>
+                    <option value="pairing">{i18nService.t('imDmPolicyPairing')}</option>
+                    <option value="allowlist">{i18nService.t('imDmPolicyAllowlist')}</option>
+                    <option value="disabled">{i18nService.t('imDmPolicyDisabled')}</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {popoConfig.dmPolicy === 'pairing' && renderPairingSection('popo')}
+
+                {/* Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={popoAllowedUserIdInput}
+                      onChange={(e) => setPopoAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = popoAllowedUserIdInput.trim();
+                          if (id && !popoConfig.allowFrom.includes(id)) {
+                            const newIds = [...popoConfig.allowFrom, id];
+                            handlePopoChange({ allowFrom: newIds });
+                            setPopoAllowedUserIdInput('');
+                            void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('lang') === 'zh' ? '输入用户 ID 后回车添加' : 'Enter user ID and press Enter'}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = popoAllowedUserIdInput.trim();
+                        if (id && !popoConfig.allowFrom.includes(id)) {
+                          const newIds = [...popoConfig.allowFrom, id];
+                          handlePopoChange({ allowFrom: newIds });
+                          setPopoAllowedUserIdInput('');
+                          void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {popoConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {popoConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = popoConfig.allowFrom.filter((uid) => uid !== id);
+                              handlePopoChange({ allowFrom: newIds });
+                              void imService.persistConfig({ popo: { ...popoConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={popoConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as PopoOpenClawConfig['groupPolicy'] };
+                      handlePopoChange(update);
+                      void handleSavePopoConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="open">Open</option>
+                    <option value="allowlist">Allowlist</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+
+                {/* Group Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Allow From (Chat IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={popoGroupAllowIdInput}
+                      onChange={(e) => setPopoGroupAllowIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = popoGroupAllowIdInput.trim();
+                          if (id && !popoConfig.groupAllowFrom.includes(id)) {
+                            const newIds = [...popoConfig.groupAllowFrom, id];
+                            handlePopoChange({ groupAllowFrom: newIds });
+                            setPopoGroupAllowIdInput('');
+                            void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder={i18nService.t('lang') === 'zh' ? '输入群组 ID 后回车添加' : 'Enter group ID and press Enter'}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = popoGroupAllowIdInput.trim();
+                        if (id && !popoConfig.groupAllowFrom.includes(id)) {
+                          const newIds = [...popoConfig.groupAllowFrom, id];
+                          handlePopoChange({ groupAllowFrom: newIds });
+                          setPopoGroupAllowIdInput('');
+                          void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {popoConfig.groupAllowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {popoConfig.groupAllowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = popoConfig.groupAllowFrom.filter((gid) => gid !== id);
+                              handlePopoChange({ groupAllowFrom: newIds });
+                              void imService.persistConfig({ popo: { ...popoConfig, groupAllowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Text Chunk Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Text Chunk Limit</label>
+                  <input
+                    type="number"
+                    value={popoConfig.textChunkLimit}
+                    onChange={(e) => handlePopoChange({ textChunkLimit: parseInt(e.target.value) || 3000 })}
+                    onBlur={() => void handleSavePopoConfig()}
+                    placeholder="3000"
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+
+                {/* Rich Text Chunk Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Rich Text Chunk Limit</label>
+                  <input
+                    type="number"
+                    value={popoConfig.richTextChunkLimit}
+                    onChange={(e) => handlePopoChange({ richTextChunkLimit: parseInt(e.target.value) || 5000 })}
+                    onBlur={() => void handleSavePopoConfig()}
+                    placeholder="5000"
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  />
+                </div>
+
+                {/* Debug toggle */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">Debug</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !popoConfig.debug;
+                      handlePopoChange({ debug: next });
+                      void handleSavePopoConfig({ debug: next });
+                    }}
+                    className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      popoConfig.debug ? 'bg-claude-accent' : 'dark:bg-claude-darkSurface bg-claude-surface'
+                    }`}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      popoConfig.debug ? 'translate-x-4' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+            </details>
+
+            {/* Connectivity test */}
+            <div className="pt-1">
+              {renderConnectivityTestButton('popo')}
+            </div>
+
+            {/* Error display */}
+            {status.popo?.lastError && (
+              <div className="text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                {status.popo.lastError}
               </div>
             )}
           </div>

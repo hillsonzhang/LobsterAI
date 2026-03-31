@@ -22,7 +22,7 @@ export interface AppConfig {
       apiKey: string;
       baseUrl: string;
       // API 协议格式：anthropic 为 Anthropic 兼容，openai 为 OpenAI 兼容
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -33,7 +33,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -44,7 +44,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Moonshot Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -57,7 +57,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 GLM Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -70,7 +70,13 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      /** OAuth auth type: 'apikey' (default) or 'oauth' (MiniMax Portal OAuth) */
+      authType?: 'apikey' | 'oauth';
+      /** OAuth refresh token for automatic token renewal */
+      oauthRefreshToken?: string;
+      /** OAuth token expiry as Unix timestamp in milliseconds */
+      oauthTokenExpiresAt?: number;
       models?: Array<{
         id: string;
         name: string;
@@ -81,7 +87,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -92,7 +98,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Qwen Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -105,7 +111,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -116,7 +122,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -127,7 +133,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -138,7 +144,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       /** 是否启用 Volcengine Coding Plan 模式（使用专属 Coding API 端点） */
       codingPlanEnabled?: boolean;
       models?: Array<{
@@ -151,7 +157,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -162,7 +168,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -173,7 +179,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -184,7 +190,7 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       models?: Array<{
         id: string;
         name: string;
@@ -195,8 +201,11 @@ export interface AppConfig {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
-      apiFormat?: 'anthropic' | 'openai';
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
       codingPlanEnabled?: boolean;
+      authType?: 'apikey' | 'oauth';
+      oauthRefreshToken?: string;
+      oauthTokenExpiresAt?: number;
       models?: Array<{
         id: string;
         name: string;
@@ -235,28 +244,29 @@ export const defaultConfig: AppConfig = {
   },
   model: {
     availableModels: [
-      { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false },
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
     ],
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-reasoner',
     defaultModelProvider: 'deepseek',
   },
   providers: {
     openai: {
       enabled: false,
       apiKey: '',
-      baseUrl: 'https://api.openai.com',
+      baseUrl: 'https://api.openai.com/v1',
       apiFormat: 'openai',
       models: [
-        { id: 'gpt-5.2-2025-12-11', name: 'GPT-5.2', supportsImage: true },
-        { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', supportsImage: true }
+        { id: 'gpt-5.4', name: 'GPT-5.4', supportsImage: true },
+        { id: 'gpt-5.2', name: 'GPT-5.2', supportsImage: true },
+        { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', supportsImage: true },
+        { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', supportsImage: true },
       ]
     },
     gemini: {
       enabled: false,
       apiKey: '',
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      apiFormat: 'openai',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      apiFormat: 'gemini',
       models: [
         { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', supportsImage: true },
         { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', supportsImage: true },
@@ -280,8 +290,7 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.deepseek.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false },
-        { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsImage: false }
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsImage: false }
       ]
     },
     moonshot: {
@@ -311,8 +320,8 @@ export const defaultConfig: AppConfig = {
       baseUrl: 'https://api.minimaxi.com/anthropic',
       apiFormat: 'anthropic',
       models: [
-        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false },
-        { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', supportsImage: false }
+        { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },
+        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', supportsImage: false }
       ]
     },
     youdaozhiyun: {

@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
+import type { Platform } from '../shared/platform';
 
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electron', {
@@ -20,6 +22,9 @@ contextBridge.exposeInMainWorld('electron', {
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('skills:setEnabled', options),
     delete: (id: string) => ipcRenderer.invoke('skills:delete', id),
     download: (source: string) => ipcRenderer.invoke('skills:download', source),
+    upgrade: (skillId: string, downloadUrl: string) => ipcRenderer.invoke('skills:upgrade', skillId, downloadUrl),
+    confirmInstall: (pendingId: string, action: string) =>
+      ipcRenderer.invoke('skills:confirmInstall', pendingId, action),
     getRoot: () => ipcRenderer.invoke('skills:getRoot'),
     autoRoutingPrompt: () => ipcRenderer.invoke('skills:autoRoutingPrompt'),
     getConfig: (skillId: string) => ipcRenderer.invoke('skills:getConfig', skillId),
@@ -39,6 +44,7 @@ contextBridge.exposeInMainWorld('electron', {
     delete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
     setEnabled: (options: { id: string; enabled: boolean }) => ipcRenderer.invoke('mcp:setEnabled', options),
     fetchMarketplace: () => ipcRenderer.invoke('mcp:fetchMarketplace'),
+    refreshBridge: () => ipcRenderer.invoke('mcp:refreshBridge'),
   },
   rag: {
     uploadDocument: (filePath: string, type: string) =>
@@ -157,9 +163,52 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('generate-session-title', userInput),
   getRecentCwds: (limit?: number) =>
     ipcRenderer.invoke('get-recent-cwds', limit),
+  openclaw: {
+    engine: {
+      getStatus: () => ipcRenderer.invoke('openclaw:engine:getStatus'),
+      install: () => ipcRenderer.invoke('openclaw:engine:install'),
+      retryInstall: () => ipcRenderer.invoke('openclaw:engine:retryInstall'),
+      restartGateway: () => ipcRenderer.invoke('openclaw:engine:restartGateway'),
+      onProgress: (callback: (status: any) => void) => {
+        const handler = (_event: any, status: any) => callback(status);
+        ipcRenderer.on('openclaw:engine:onProgress', handler);
+        return () => ipcRenderer.removeListener('openclaw:engine:onProgress', handler);
+      },
+    },
+  },
+  agents: {
+    list: async () => {
+      const result = await ipcRenderer.invoke('agents:list');
+      return result?.success ? result.agents : [];
+    },
+    get: async (id: string) => {
+      const result = await ipcRenderer.invoke('agents:get', id);
+      return result?.success ? result.agent : null;
+    },
+    create: async (request: { id?: string; name: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; source?: string; presetId?: string }) => {
+      const result = await ipcRenderer.invoke('agents:create', request);
+      return result?.success ? result.agent : null;
+    },
+    update: async (id: string, updates: { name?: string; description?: string; systemPrompt?: string; identity?: string; model?: string; icon?: string; skillIds?: string[]; enabled?: boolean }) => {
+      const result = await ipcRenderer.invoke('agents:update', id, updates);
+      return result?.success ? result.agent : null;
+    },
+    delete: async (id: string) => {
+      const result = await ipcRenderer.invoke('agents:delete', id);
+      return result?.success ? result.deleted : false;
+    },
+    presets: async () => {
+      const result = await ipcRenderer.invoke('agents:presets');
+      return result?.success ? result.presets : [];
+    },
+    addPreset: async (presetId: string) => {
+      const result = await ipcRenderer.invoke('agents:addPreset', presetId);
+      return result?.success ? result.agent : null;
+    },
+  },
   cowork: {
     // Session management
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; activeSkillIds?: string[]; agentId?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:start', options),
     continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
       ipcRenderer.invoke('cowork:session:continue', options),
@@ -175,8 +224,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:session:rename', options),
     getSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:get', sessionId),
-    listSessions: () =>
-      ipcRenderer.invoke('cowork:session:list'),
+    remoteManaged: (sessionId: string) =>
+      ipcRenderer.invoke('cowork:session:remoteManaged', sessionId),
+    listSessions: (agentId?: string) =>
+      ipcRenderer.invoke('cowork:session:list', agentId),
     exportResultImage: (options: { rect: { x: number; y: number; width: number; height: number }; defaultFileName?: string }) =>
       ipcRenderer.invoke('cowork:session:exportResultImage', options),
     captureImageChunk: (options: { rect: { x: number; y: number; width: number; height: number } }) =>
@@ -194,6 +245,7 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: {
       workingDirectory?: string;
       executionMode?: 'auto' | 'local' | 'sandbox';
+      agentEngine?: 'openclaw' | 'yd_cowork';
       memoryEnabled?: boolean;
       memoryImplicitUpdateEnabled?: boolean;
       memoryLlmJudgeEnabled?: boolean;
@@ -227,15 +279,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:memory:deleteEntry', input),
     getMemoryStats: () =>
       ipcRenderer.invoke('cowork:memory:getStats'),
-    getSandboxStatus: () =>
-      ipcRenderer.invoke('cowork:sandbox:status'),
-    installSandbox: () =>
-      ipcRenderer.invoke('cowork:sandbox:install'),
-    onSandboxDownloadProgress: (callback: (data: any) => void) => {
-      const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('cowork:sandbox:downloadProgress', handler);
-      return () => ipcRenderer.removeListener('cowork:sandbox:downloadProgress', handler);
-    },
+    readBootstrapFile: (filename: string) =>
+      ipcRenderer.invoke('cowork:bootstrap:read', filename),
+    writeBootstrapFile: (filename: string, content: string) =>
+      ipcRenderer.invoke('cowork:bootstrap:write', filename, content),
     // Stream event listeners
     onStreamMessage: (callback: (data: { sessionId: string; message: any }) => void) => {
       const handler = (_event: any, data: { sessionId: string; message: any }) => callback(data);
@@ -251,6 +298,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: { sessionId: string; request: any }) => callback(data);
       ipcRenderer.on('cowork:stream:permission', handler);
       return () => ipcRenderer.removeListener('cowork:stream:permission', handler);
+    },
+    onStreamPermissionDismiss: (callback: (data: { requestId: string }) => void) => {
+      const handler = (_event: any, data: { requestId: string }) => callback(data);
+      ipcRenderer.on('cowork:stream:permissionDismiss', handler);
+      return () => ipcRenderer.removeListener('cowork:stream:permissionDismiss', handler);
     },
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => {
       const handler = (_event: any, data: { sessionId: string; claudeSessionId: string | null }) => callback(data);
@@ -274,6 +326,11 @@ contextBridge.exposeInMainWorld('electron', {
     },
     compactSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:compact', sessionId),
+    onSessionsChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('cowork:sessions:changed', handler);
+      return () => ipcRenderer.removeListener('cowork:sessions:changed', handler);
+    },
   },
   screenshot: {
     capture: (options?: { hideWindow?: boolean; cwd?: string }) =>
@@ -299,6 +356,10 @@ contextBridge.exposeInMainWorld('electron', {
     get: () => ipcRenderer.invoke('app:getAutoLaunch'),
     set: (enabled: boolean) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
   },
+  preventSleep: {
+    get: () => ipcRenderer.invoke('app:getPreventSleep'),
+    set: (enabled: boolean) => ipcRenderer.invoke('app:setPreventSleep', enabled),
+  },
   appInfo: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
@@ -321,18 +382,32 @@ contextBridge.exposeInMainWorld('electron', {
   im: {
     // Configuration
     getConfig: () => ipcRenderer.invoke('im:config:get'),
-    setConfig: (config: any) => ipcRenderer.invoke('im:config:set', config),
+    setConfig: (config: any, options?: { syncGateway?: boolean }) => ipcRenderer.invoke('im:config:set', config, options),
+    syncConfig: () => ipcRenderer.invoke('im:config:sync'),
 
     // Gateway control
-    startGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom') => ipcRenderer.invoke('im:gateway:start', platform),
-    stopGateway: (platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom') => ipcRenderer.invoke('im:gateway:stop', platform),
+    startGateway: (platform: Platform) => ipcRenderer.invoke('im:gateway:start', platform),
+    stopGateway: (platform: Platform) => ipcRenderer.invoke('im:gateway:stop', platform),
     testGateway: (
-      platform: 'dingtalk' | 'feishu' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom',
+      platform: Platform,
       configOverride?: any
     ) => ipcRenderer.invoke('im:gateway:test', platform, configOverride),
 
     // Status
     getStatus: () => ipcRenderer.invoke('im:status:get'),
+    getLocalIp: () => ipcRenderer.invoke('im:getLocalIp') as Promise<string>,
+    // OpenClaw config schema
+    getOpenClawConfigSchema: () => ipcRenderer.invoke('im:openclaw:config-schema'),
+
+
+    // Weixin QR login
+    weixinQrLoginStart: () => ipcRenderer.invoke('im:weixin:qr-login-start'),
+    weixinQrLoginWait: (accountId?: string) => ipcRenderer.invoke('im:weixin:qr-login-wait', accountId),
+
+    // Pairing
+    listPairingRequests: (platform: string) => ipcRenderer.invoke('im:pairing:list', platform),
+    approvePairingCode: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:approve', platform, code),
+    rejectPairingRequest: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:reject', platform, code),
 
     // Event listeners
     onStatusChange: (callback: (status: any) => void) => {
@@ -348,37 +423,93 @@ contextBridge.exposeInMainWorld('electron', {
   },
   scheduledTasks: {
     // Task CRUD
-    list: () => ipcRenderer.invoke('scheduledTask:list'),
-    get: (id: string) => ipcRenderer.invoke('scheduledTask:get', id),
-    create: (input: any) => ipcRenderer.invoke('scheduledTask:create', input),
-    update: (id: string, input: any) => ipcRenderer.invoke('scheduledTask:update', id, input),
-    delete: (id: string) => ipcRenderer.invoke('scheduledTask:delete', id),
-    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke('scheduledTask:toggle', id, enabled),
+    list: () => ipcRenderer.invoke(ScheduledTaskIpc.List),
+    get: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Get, id),
+    create: (input: any) => ipcRenderer.invoke(ScheduledTaskIpc.Create, input),
+    update: (id: string, input: any) => ipcRenderer.invoke(ScheduledTaskIpc.Update, id, input),
+    delete: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Delete, id),
+    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke(ScheduledTaskIpc.Toggle, id, enabled),
 
     // Execution
-    runManually: (id: string) => ipcRenderer.invoke('scheduledTask:runManually', id),
-    stop: (id: string) => ipcRenderer.invoke('scheduledTask:stop', id),
+    runManually: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.RunManually, id),
+    stop: (id: string) => ipcRenderer.invoke(ScheduledTaskIpc.Stop, id),
 
     // Run history
     listRuns: (taskId: string, limit?: number, offset?: number) =>
-      ipcRenderer.invoke('scheduledTask:listRuns', taskId, limit, offset),
-    countRuns: (taskId: string) => ipcRenderer.invoke('scheduledTask:countRuns', taskId),
+      ipcRenderer.invoke(ScheduledTaskIpc.ListRuns, taskId, limit, offset),
+    countRuns: (taskId: string) => ipcRenderer.invoke(ScheduledTaskIpc.CountRuns, taskId),
     listAllRuns: (limit?: number, offset?: number) =>
-      ipcRenderer.invoke('scheduledTask:listAllRuns', limit, offset),
+      ipcRenderer.invoke(ScheduledTaskIpc.ListAllRuns, limit, offset),
+    resolveSession: (sessionKey: string) =>
+      ipcRenderer.invoke(ScheduledTaskIpc.ResolveSession, sessionKey),
+
+    // Delivery channels
+    listChannels: () => ipcRenderer.invoke(ScheduledTaskIpc.ListChannels),
+    listChannelConversations: (channel: string) => ipcRenderer.invoke(ScheduledTaskIpc.ListChannelConversations, channel),
 
     // Stream event listeners
     onStatusUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('scheduledTask:statusUpdate', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:statusUpdate', handler);
+      ipcRenderer.on(ScheduledTaskIpc.StatusUpdate, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.StatusUpdate, handler);
     },
     onRunUpdate: (callback: (data: any) => void) => {
       const handler = (_event: any, data: any) => callback(data);
-      ipcRenderer.on('scheduledTask:runUpdate', handler);
-      return () => ipcRenderer.removeListener('scheduledTask:runUpdate', handler);
+      ipcRenderer.on(ScheduledTaskIpc.RunUpdate, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.RunUpdate, handler);
+    },
+    onRefresh: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(ScheduledTaskIpc.Refresh, handler);
+      return () => ipcRenderer.removeListener(ScheduledTaskIpc.Refresh, handler);
     },
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
+  },
+  auth: {
+    login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),
+    exchange: (code: string) => ipcRenderer.invoke('auth:exchange', { code }),
+    getUser: () => ipcRenderer.invoke('auth:getUser'),
+    getQuota: () => ipcRenderer.invoke('auth:getQuota'),
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    refreshToken: () => ipcRenderer.invoke('auth:refreshToken'),
+    getAccessToken: () => ipcRenderer.invoke('auth:getAccessToken'),
+    getModels: () => ipcRenderer.invoke('auth:getModels'),
+    getProfileSummary: () => ipcRenderer.invoke('auth:getProfileSummary'),
+    onCallback: (callback: (data: { code: string }) => void) => {
+      const handler = (_event: any, data: { code: string }) => callback(data);
+      ipcRenderer.on('auth:callback', handler);
+      return () => ipcRenderer.removeListener('auth:callback', handler);
+    },
+    onQuotaChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('auth:quotaChanged', handler);
+      return () => ipcRenderer.removeListener('auth:quotaChanged', handler);
+    },
+  },
+  feishu: {
+    install: {
+      qrcode: (isLark: boolean) =>
+        ipcRenderer.invoke('feishu:install:qrcode', { isLark }) as Promise<{
+          url: string;
+          deviceCode: string;
+          interval: number;
+          expireIn: number;
+        }>,
+      poll: (deviceCode: string) =>
+        ipcRenderer.invoke('feishu:install:poll', { deviceCode }) as Promise<{
+          done: boolean;
+          appId?: string;
+          appSecret?: string;
+          domain?: string;
+          error?: string;
+        }>,
+      verify: (appId: string, appSecret: string) =>
+        ipcRenderer.invoke('feishu:install:verify', { appId, appSecret }) as Promise<{
+          success: boolean;
+          error?: string;
+        }>,
+    },
   },
 });

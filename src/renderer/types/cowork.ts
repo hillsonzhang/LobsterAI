@@ -13,6 +13,7 @@ export type CoworkMessageType = 'user' | 'assistant' | 'tool_use' | 'tool_result
 
 // Cowork execution mode
 export type CoworkExecutionMode = 'auto' | 'local' | 'sandbox';
+export type CoworkAgentEngine = 'openclaw' | 'yd_cowork';
 
 // Cowork message metadata
 export interface CoworkMessageMetadata {
@@ -49,6 +50,7 @@ export interface CoworkSession {
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
+  agentId: string;
   messages: CoworkMessage[];
   lastInputTokens?: number;
   lastOutputTokens?: number;
@@ -61,6 +63,7 @@ export interface CoworkConfig {
   workingDirectory: string;
   systemPrompt: string;
   executionMode: CoworkExecutionMode;
+  agentEngine: CoworkAgentEngine;
   memoryEnabled: boolean;
   memoryImplicitUpdateEnabled: boolean;
   memoryLlmJudgeEnabled: boolean;
@@ -72,6 +75,7 @@ export type CoworkConfigUpdate = Partial<Pick<
   CoworkConfig,
   | 'workingDirectory'
   | 'executionMode'
+  | 'agentEngine'
   | 'memoryEnabled'
   | 'memoryImplicitUpdateEnabled'
   | 'memoryLlmJudgeEnabled'
@@ -86,34 +90,25 @@ export interface CoworkApiConfig {
   apiType?: 'anthropic' | 'openai';
 }
 
-export type CoworkSandboxStatus = {
-  supported: boolean;
-  runtimeReady: boolean;
-  imageReady: boolean;
-  downloading: boolean;
-  progress?: CoworkSandboxProgress;
-  error?: string | null;
-};
+export type OpenClawEnginePhase =
+  | 'not_installed'
+  | 'installing'
+  | 'ready'
+  | 'starting'
+  | 'running'
+  | 'error';
 
-export type CoworkSandboxProgress = {
-  stage: 'runtime' | 'image';
-  received: number;
-  total?: number;
-  percent?: number;
-  url?: string;
-};
-
-export type CoworkUserMemoryStatus = 'created' | 'stale' | 'deleted';
+export interface OpenClawEngineStatus {
+  phase: OpenClawEnginePhase;
+  version: string | null;
+  progressPercent?: number;
+  message?: string;
+  canRetry: boolean;
+}
 
 export interface CoworkUserMemoryEntry {
   id: string;
   text: string;
-  confidence: number;
-  isExplicit: boolean;
-  status: CoworkUserMemoryStatus;
-  createdAt: number;
-  updatedAt: number;
-  lastUsedAt: number | null;
 }
 
 export interface CoworkMemoryStats {
@@ -160,6 +155,7 @@ export interface CoworkSessionSummary {
   title: string;
   status: CoworkSessionStatus;
   pinned: boolean;
+  agentId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -171,6 +167,7 @@ export interface CoworkStartOptions {
   systemPrompt?: string;
   title?: string;
   activeSkillIds?: string[];
+  agentId?: string;
   imageAttachments?: CoworkImageAttachment[];
 }
 

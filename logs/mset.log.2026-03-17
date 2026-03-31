@@ -1,0 +1,22 @@
+2026-03-17 12:24:21.067 +08:00  INFO main ThreadId(01) mset::core::tracing_logger: src\core\tracing_logger.rs:216: Tracing logger initialized successfully
+2026-03-17 12:24:21.068 +08:00  INFO main ThreadId(01) mset: src\main.rs:60: 已初始化tracing日志系统
+2026-03-17 12:24:21.068 +08:00  INFO main ThreadId(01) mset: src\main.rs:93: MSET运行时启动
+2026-03-17 12:24:21.068 +08:00 ERROR main ThreadId(01) mset: src\main.rs:118: 未找到 MSET_HOME 环境变量，将使用默认路径
+2026-03-17 12:24:21.068 +08:00  INFO main ThreadId(01) mset: src\main.rs:127: 显示帮助信息
+2026-03-17 12:24:25.939 +08:00  INFO main ThreadId(01) mset::core::tracing_logger: src\core\tracing_logger.rs:216: Tracing logger initialized successfully
+2026-03-17 12:24:25.940 +08:00  INFO main ThreadId(01) mset: src\main.rs:60: 已初始化tracing日志系统
+2026-03-17 12:24:25.940 +08:00  INFO main ThreadId(01) mset: src\main.rs:93: MSET运行时启动
+2026-03-17 12:24:25.940 +08:00  INFO main ThreadId(01) mset: src\main.rs:117: 使用的 MSET_HOME 路径: C:/code/LobsterAI
+2026-03-17 12:24:25.940 +08:00  INFO main ThreadId(01) mset: src\main.rs:127: 显示帮助信息
+2026-03-17 12:32:35.575 +08:00  INFO main ThreadId(01) mset::core::tracing_logger: src\core\tracing_logger.rs:216: Tracing logger initialized successfully
+2026-03-17 12:32:35.575 +08:00  INFO main ThreadId(01) mset: src\main.rs:60: 已初始化tracing日志系统
+2026-03-17 12:32:35.575 +08:00  INFO main ThreadId(01) mset: src\main.rs:93: MSET运行时启动
+2026-03-17 12:32:35.576 +08:00  INFO main ThreadId(01) mset: src\main.rs:117: 使用的 MSET_HOME 路径: C:/code/LobsterAI
+2026-03-17 12:32:35.585 +08:00  INFO main ThreadId(01) mset: src\main.rs:253: 环境变量设置成功
+2026-03-17 12:32:35.585 +08:00  INFO main ThreadId(01) mset: src\main.rs:266: 主程序-->子程序准备执行命令 command=node
+2026-03-17 12:32:35.585 +08:00  INFO main ThreadId(01) mset::core::tracing_logger_extension_compat: src\core\tracing_logger_extension_compat.rs:105: 开始执行命令 event="command_execution_start" command_type=node is_mcp=false args_count=2
+2026-03-17 12:32:35.585 +08:00  INFO main ThreadId(01) mset::command::command_executor: src\command\command_executor.rs:53: 处理第一个命令参数 command=node
+2026-03-17 12:32:35.586 +08:00  INFO main ThreadId(01) mset::command::command_executor: src\command\command_executor.rs:131: 不是MCP命令，直接执行命令 command="node" "--version" args=["node", "--version"]
+2026-03-17 12:32:35.604 +08:00  INFO main ThreadId(01) mset::core::tracing_logger_extension_compat: src\core\tracing_logger_extension_compat.rs:212: 命令执行完成 event="command_execution_complete" command_type=node is_mcp=false process_id=0 exit_code=Some(0) execution_time_ms=18 success=true
+2026-03-17 12:32:35.604 +08:00  INFO main ThreadId(01) mset::command::command_executor: src\command\command_executor.rs:158: 命令执行成功 exit_code=Some(0)
+2026-03-17 12:32:35.604 +08:00  INFO main ThreadId(01) mset: src\main.rs:272: 命令执行成功 command=node

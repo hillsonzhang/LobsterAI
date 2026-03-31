@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import path from 'path';
+import fs from 'fs';
 
 // https://vitejs.dev/config/
 const devPort = 5175;
@@ -25,7 +26,12 @@ export default defineConfig({
             outDir: 'dist-electron',
             minify: false,
             rollupOptions: {
-              external: ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'],
+              external: (id) => {
+                const staticExternals = ['sql.js', 'discord.js', 'zlib-sync', '@discordjs/opus', 'bufferutil', 'utf-8-validate', 'node-nim', 'nim-web-sdk-ng'];
+                if (staticExternals.includes(id)) return true;
+                if (id.startsWith('@larksuite/openclaw-lark-tools') || id.startsWith('@larksuite/openclaw-lark')) return true;
+                return false;
+              },
               output: {
                 // Keep CJS format (default), but load via ESM loader.mjs
                 inlineDynamicImports: true,
@@ -33,7 +39,10 @@ export default defineConfig({
             },
           },
         },
-        onstart() {},
+        onstart() {
+          // Signal that the main process bundle is ready for electron to load
+          fs.writeFileSync('dist-electron/.electron-ready', '');
+        },
       },
       {
         // 预加载脚本入口文件
@@ -53,6 +62,7 @@ export default defineConfig({
   base: process.env.NODE_ENV === 'development' ? '/' : './',
   resolve: {
     alias: {
+      '@shared': path.resolve(__dirname, './src/shared'),
       '@': path.resolve(__dirname, './src/renderer'),
     },
   },
@@ -70,11 +80,11 @@ export default defineConfig({
       port: devPort,
     },
     watch: {
-      usePolling: true,
+      usePolling: false,
     },
   },
   optimizeDeps: {
-    exclude: ['electron'],
+    exclude: ['electron', '@larksuite/openclaw-lark-tools', '@larksuite/openclaw-lark'],
     esbuildOptions: {
       define: {
         __VERSION__: JSON.stringify(katexVersion),

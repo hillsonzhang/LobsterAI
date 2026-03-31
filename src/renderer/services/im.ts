@@ -4,6 +4,8 @@
  */
 
 import { store } from '../store';
+import { PlatformRegistry } from '@shared/platform';
+import type { Platform } from '@shared/platform';
 import {
   setConfig,
   setStatus,
@@ -13,7 +15,6 @@ import {
 import type {
   IMGatewayConfig,
   IMGatewayStatus,
-  IMPlatform,
   IMConfigResult,
   IMStatusResult,
   IMGatewayResult,
@@ -107,12 +108,13 @@ class IMService {
   }
 
   /**
-   * Update configuration
+   * Update configuration and trigger gateway sync/restart.
+   * Used by toggleGateway and other operations that need immediate effect.
    */
   async updateConfig(config: Partial<IMGatewayConfig>): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
-      const result: IMGatewayResult = await window.electron.im.setConfig(config);
+      const result: IMGatewayResult = await window.electron.im.setConfig(config, { syncGateway: true });
       if (result.success) {
         // Reload config to get merged values
         await this.loadConfig();
@@ -131,9 +133,42 @@ class IMService {
   }
 
   /**
+   * Persist configuration to DB without triggering gateway sync/restart.
+   * Used by onBlur handlers to save field values silently.
+   */
+  async persistConfig(config: Partial<IMGatewayConfig>): Promise<boolean> {
+    try {
+      const result: IMGatewayResult = await window.electron.im.setConfig(config, { syncGateway: false });
+      if (result.success) {
+        return true;
+      } else {
+        console.error('[IM Service] Failed to persist config:', result.error);
+        return false;
+      }
+    } catch (error) {
+      console.error('[IM Service] Failed to persist config:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Sync IM gateway config (regenerate openclaw.json and restart gateway).
+   * Called from the global Settings Save button.
+   */
+  async saveAndSyncConfig(): Promise<boolean> {
+    try {
+      const result: IMGatewayResult = await window.electron.im.syncConfig();
+      return result.success;
+    } catch (error) {
+      console.error('[IM Service] Failed to sync IM config:', error);
+      return false;
+    }
+  }
+
+  /**
    * Start a gateway
    */
-  async startGateway(platform: IMPlatform): Promise<boolean> {
+  async startGateway(platform: Platform): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
       store.dispatch(setError(null));
@@ -157,7 +192,7 @@ class IMService {
   /**
    * Stop a gateway
    */
-  async stopGateway(platform: IMPlatform): Promise<boolean> {
+  async stopGateway(platform: Platform): Promise<boolean> {
     try {
       store.dispatch(setLoading(true));
       const result: IMGatewayResult = await window.electron.im.stopGateway(platform);
@@ -181,7 +216,7 @@ class IMService {
    * Test gateway connectivity and conversation readiness
    */
   async testGateway(
-    platform: IMPlatform,
+    platform: Platform,
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult | null> {
     try {
@@ -220,7 +255,43 @@ class IMService {
    */
   isAnyConnected(): boolean {
     const status = this.getStatus();
-    return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected || status.nim.connected || status.xiaomifeng.connected || status.wecom.connected;
+    return PlatformRegistry.platforms.some(p => status[p]?.connected);
+  }
+
+  /**
+   * List pending pairing requests and approved allowFrom for a platform
+   */
+  async listPairingRequests(platform: string) {
+    return window.electron.im.listPairingRequests(platform);
+  }
+
+  /**
+   * Approve a pairing code
+   */
+  async approvePairingCode(platform: string, code: string) {
+    return window.electron.im.approvePairingCode(platform, code);
+  }
+
+  /**
+   * Reject a pairing request
+   */
+  async rejectPairingRequest(platform: string, code: string) {
+    return window.electron.im.rejectPairingRequest(platform, code);
+  }
+
+  /**
+   * Fetch the OpenClaw config schema (JSON Schema + uiHints) from the gateway.
+   */
+  async getOpenClawConfigSchema(): Promise<{ schema: Record<string, unknown>; uiHints: Record<string, Record<string, unknown>> } | null> {
+    try {
+      const result = await window.electron.im.getOpenClawConfigSchema();
+      if (result.success && result.result) {
+        return result.result;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 }
 

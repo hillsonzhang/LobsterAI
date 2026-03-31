@@ -11,10 +11,12 @@ import {
   addMessage,
   updateMessageContent,
   setStreaming,
+  setRemoteManaged,
   updateSessionPinned,
   updateSessionTitle,
   enqueuePendingPermission,
   dequeuePendingPermission,
+  clearPendingPermissions,
   setConfig,
   clearCurrentSession,
   updateTokenUsage,
@@ -25,18 +27,29 @@ import type {
   CoworkSession,
   CoworkConfigUpdate,
   CoworkApiConfig,
-  CoworkSandboxStatus,
-  CoworkSandboxProgress,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
   CoworkPermissionResult,
+  OpenClawEngineStatus,
   CoworkStartOptions,
   CoworkContinueOptions,
 } from '../types/cowork';
+import { i18nService } from './i18n';
+import { classifyErrorKey } from '../../common/coworkErrorClassify';
+
+const classifyError = (error: string): string => {
+  const key = classifyErrorKey(error);
+  return key ? i18nService.t(key) : error;
+};
 
 class CoworkService {
   private streamListenerCleanups: Array<() => void> = [];
   private initialized = false;
+  private openClawStatus: OpenClawEngineStatus | null = null;
+  private openClawStatusListeners = new Set<(status: OpenClawEngineStatus) => void>();
+  private openClawEngineListenerAttached = false;
+  private latestLoadSessionsRequestId = 0;
+  private latestLoadSessionRequestId = 0;
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -49,6 +62,10 @@ class CoworkService {
 
     // Set up stream listeners
     this.setupStreamListeners();
+    this.setupOpenClawEngineListeners();
+
+    // Load OpenClaw status
+    await this.loadOpenClawEngineStatus();
 
     this.initialized = true;
   }
@@ -78,9 +95,14 @@ class CoworkService {
       const state = store.getState().cowork;
       const sessionExists = state.sessions.some(s => s.id === sessionId);
 
+      console.log('[CoworkService] onStreamMessage: sessionId=', sessionId, 'type=', message.type, 'sessionExists=', sessionExists, 'totalSessions=', state.sessions.length);
       if (!sessionExists) {
         // Session was created by IM or another source, refresh the session list
+        console.log('[CoworkService] onStreamMessage: session NOT found in Redux, calling loadSessions...');
         await this.loadSessions();
+        const newState = store.getState().cowork;
+        const nowExists = newState.sessions.some(s => s.id === sessionId);
+        console.log('[CoworkService] onStreamMessage: after loadSessions, sessionExists=', nowExists, 'totalSessions=', newState.sessions.length);
       }
 
       // A new user turn means this session is actively running again
@@ -115,6 +137,12 @@ class CoworkService {
     });
     this.streamListenerCleanups.push(permissionCleanup);
 
+    // Permission dismiss listener (timeout or server-side resolution)
+    const permissionDismissCleanup = cowork.onStreamPermissionDismiss(({ requestId }) => {
+      store.dispatch(dequeuePendingPermission({ requestId }));
+    });
+    this.streamListenerCleanups.push(permissionDismissCleanup);
+
     // Complete listener
     const completeCleanup = cowork.onStreamComplete(({ sessionId }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'completed' }));
@@ -122,8 +150,20 @@ class CoworkService {
     this.streamListenerCleanups.push(completeCleanup);
 
     // Error listener
-    const errorCleanup = cowork.onStreamError(({ sessionId }) => {
+    const errorCleanup = cowork.onStreamError(({ sessionId, error }) => {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
+      // Surface the error as a visible message so the user knows what happened.
+      if (error) {
+        store.dispatch(addMessage({
+          sessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: classifyError(error),
+            timestamp: Date.now(),
+          },
+        }));
+      }
     });
     this.streamListenerCleanups.push(errorCleanup);
 
@@ -162,16 +202,55 @@ class CoworkService {
       });
       this.streamListenerCleanups.push(contextCompactedCleanup);
     }
+
+    // Sessions changed listener (new channel sessions discovered by polling)
+    const sessionsChangedCleanup = cowork.onSessionsChanged(() => {
+      const beforeState = store.getState().cowork;
+      console.log('[CoworkService] onSessionsChanged: received IPC event, before sessions:', beforeState.sessions.length, 'sessionIds:', beforeState.sessions.map(s => s.id).slice(0, 5));
+      void this.loadSessions().then(() => {
+        const state = store.getState().cowork;
+        console.log('[CoworkService] onSessionsChanged: loadSessions complete, total sessions:', state.sessions.length, 'sessionIds:', state.sessions.map(s => s.id).slice(0, 5));
+      }).catch((err) => {
+        console.error('[CoworkService] onSessionsChanged: loadSessions FAILED:', err);
+      });
+    });
+    this.streamListenerCleanups.push(sessionsChangedCleanup);
+  }
+
+  private setupOpenClawEngineListeners(): void {
+    if (this.openClawEngineListenerAttached) return;
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.onProgress) return;
+
+    const statusCleanup = engineApi.onProgress((status) => {
+      this.notifyOpenClawStatus(status);
+    });
+    this.streamListenerCleanups.push(statusCleanup);
+    this.openClawEngineListenerAttached = true;
+  }
+
+  private notifyOpenClawStatus(status: OpenClawEngineStatus): void {
+    this.openClawStatus = status;
+    this.openClawStatusListeners.forEach((listener) => {
+      listener(status);
+    });
   }
 
   private cleanupListeners(): void {
     this.streamListenerCleanups.forEach(cleanup => cleanup());
     this.streamListenerCleanups = [];
+    this.openClawEngineListenerAttached = false;
   }
 
-  async loadSessions(): Promise<void> {
-    const result = await window.electron?.cowork?.listSessions();
+  async loadSessions(agentId?: string): Promise<void> {
+    const requestId = ++this.latestLoadSessionsRequestId;
+    const result = await window.electron?.cowork?.listSessions(agentId);
     if (result?.success && result.sessions) {
+      // High-frequency IM traffic can trigger overlapping list refreshes.
+      // Ignore stale responses so an older snapshot does not hide newer sessions.
+      if (requestId !== this.latestLoadSessionsRequestId) {
+        return;
+      }
       store.dispatch(setSessions(result.sessions));
     }
   }
@@ -183,11 +262,25 @@ class CoworkService {
     }
   }
 
-  async startSession(options: CoworkStartOptions): Promise<CoworkSession | null> {
+  async loadOpenClawEngineStatus(): Promise<OpenClawEngineStatus | null> {
+    this.setupOpenClawEngineListeners();
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.getStatus) {
+      return null;
+    }
+    const result = await engineApi.getStatus();
+    if (result?.success && result.status) {
+      this.notifyOpenClawStatus(result.status);
+      return result.status;
+    }
+    return this.openClawStatus;
+  }
+
+  async startSession(options: CoworkStartOptions): Promise<{ session: CoworkSession | null; error?: string }> {
     const cowork = window.electron?.cowork;
     if (!cowork) {
       console.error('Cowork API not available');
-      return null;
+      return { session: null, error: 'Cowork API not available' };
     }
 
     store.dispatch(setStreaming(true));
@@ -198,12 +291,24 @@ class CoworkService {
       if (result.session.status !== 'running') {
         store.dispatch(setStreaming(false));
       }
-      return result.session;
+      return { session: result.session };
+    }
+
+    if (result.engineStatus) {
+      this.notifyOpenClawStatus(result.engineStatus);
+    }
+
+    // Show a user-visible error when session start fails
+    if (result.error) {
+      const errorContent = result.code === 'ENGINE_NOT_READY'
+        ? i18nService.t('coworkErrorEngineNotReady')
+        : classifyError(result.error);
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: errorContent }));
     }
 
     store.dispatch(setStreaming(false));
     console.error('Failed to start session:', result.error);
-    return null;
+    return { session: null, error: result.error };
   }
 
   async continueSession(options: CoworkContinueOptions): Promise<boolean> {
@@ -226,7 +331,38 @@ class CoworkService {
     });
     if (!result.success) {
       store.dispatch(setStreaming(false));
-      store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
+      if (result.engineStatus) {
+        this.notifyOpenClawStatus(result.engineStatus);
+      }
+      if (result.code !== 'ENGINE_NOT_READY') {
+        store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'error' }));
+        if (result.error) {
+          store.dispatch(addMessage({
+            sessionId: options.sessionId,
+            message: {
+              id: `error-${Date.now()}`,
+              type: 'system',
+              content: i18nService.t('coworkErrorSessionContinueFailed').replace('{error}', result.error),
+              timestamp: Date.now(),
+            },
+          }));
+        }
+      }
+      // Show a user-visible error message in the session
+      if (result.error) {
+        const errorContent = result.code === 'ENGINE_NOT_READY'
+          ? i18nService.t('coworkErrorEngineNotReady')
+          : classifyError(result.error);
+        store.dispatch(addMessage({
+          sessionId: options.sessionId,
+          message: {
+            id: `error-${Date.now()}`,
+            type: 'system',
+            content: errorContent,
+            timestamp: Date.now(),
+          },
+        }));
+      }
       console.error('Failed to continue session:', result.error);
       return false;
     }
@@ -370,9 +506,14 @@ class CoworkService {
   async loadSession(sessionId: string): Promise<CoworkSession | null> {
     const cowork = window.electron?.cowork;
     if (!cowork) return null;
+    const requestId = ++this.latestLoadSessionRequestId;
 
     const result = await cowork.getSession(sessionId);
     if (result.success && result.session) {
+      // Keep only the latest session load result to avoid stale async overwrites.
+      if (requestId !== this.latestLoadSessionRequestId) {
+        return result.session;
+      }
       // 立即更新 sessionId，让 tab 高亮瞬间切换
       store.dispatch(setCurrentSessionId(sessionId));
       store.dispatch(setStreaming(result.session.status === 'running'));
@@ -388,6 +529,12 @@ class CoworkService {
       startTransition(() => {
         store.dispatch(setCurrentSession(result.session ?? null));
       });
+
+      const imResult = await cowork.remoteManaged(sessionId);
+      if (requestId === this.latestLoadSessionRequestId) {
+        store.dispatch(setRemoteManaged(imResult?.remoteManaged ?? false));
+      }
+
       return result.session;
     }
 
@@ -413,10 +560,16 @@ class CoworkService {
     const cowork = window.electron?.cowork;
     if (!cowork) return false;
 
+    const currentConfig = store.getState().cowork.config;
+    const engineChanged = config.agentEngine !== undefined
+      && config.agentEngine !== currentConfig.agentEngine;
     const result = await cowork.setConfig(config);
     if (result.success) {
-      const currentConfig = store.getState().cowork.config;
       store.dispatch(setConfig({ ...currentConfig, ...config }));
+      if (engineChanged) {
+        store.dispatch(clearPendingPermissions());
+        store.dispatch(setStreaming(false));
+      }
       return true;
     }
 
@@ -445,24 +598,8 @@ class CoworkService {
     return window.electron.saveApiConfig(config);
   }
 
-  async getSandboxStatus(): Promise<CoworkSandboxStatus | null> {
-    if (!window.electron?.cowork?.getSandboxStatus) {
-      return null;
-    }
-    return window.electron.cowork.getSandboxStatus();
-  }
-
-  async installSandbox(): Promise<{ success: boolean; status: CoworkSandboxStatus; error?: string } | null> {
-    if (!window.electron?.cowork?.installSandbox) {
-      return null;
-    }
-    return window.electron.cowork.installSandbox();
-  }
-
   async listMemoryEntries(input: {
     query?: string;
-    status?: 'created' | 'stale' | 'deleted' | 'all';
-    includeDeleted?: boolean;
     limit?: number;
     offset?: number;
   }): Promise<CoworkUserMemoryEntry[]> {
@@ -475,8 +612,6 @@ class CoworkService {
 
   async createMemoryEntry(input: {
     text: string;
-    confidence?: number;
-    isExplicit?: boolean;
   }): Promise<CoworkUserMemoryEntry | null> {
     const api = window.electron?.cowork?.createMemoryEntry;
     if (!api) return null;
@@ -487,10 +622,7 @@ class CoworkService {
 
   async updateMemoryEntry(input: {
     id: string;
-    text?: string;
-    confidence?: number;
-    status?: 'created' | 'stale' | 'deleted';
-    isExplicit?: boolean;
+    text: string;
   }): Promise<CoworkUserMemoryEntry | null> {
     const api = window.electron?.cowork?.updateMemoryEntry;
     if (!api) return null;
@@ -514,11 +646,76 @@ class CoworkService {
     return result.stats;
   }
 
-  onSandboxDownloadProgress(callback: (progress: CoworkSandboxProgress) => void): () => void {
-    if (!window.electron?.cowork?.onSandboxDownloadProgress) {
-      return () => {};
+  async readBootstrapFile(filename: string): Promise<string> {
+    const api = window.electron?.cowork?.readBootstrapFile;
+    if (!api) return '';
+    const result = await api(filename);
+    if (!result?.success) {
+      console.warn(`[CoworkService] readBootstrapFile: failed to read ${filename}`, result?.error);
+      return '';
     }
-    return window.electron.cowork.onSandboxDownloadProgress(callback);
+    return result.content || '';
+  }
+
+  async writeBootstrapFile(filename: string, content: string): Promise<boolean> {
+    const api = window.electron?.cowork?.writeBootstrapFile;
+    if (!api) return false;
+    const result = await api(filename, content);
+    return Boolean(result?.success);
+  }
+
+  onOpenClawEngineStatus(callback: (status: OpenClawEngineStatus) => void): () => void {
+    this.setupOpenClawEngineListeners();
+    this.openClawStatusListeners.add(callback);
+    if (this.openClawStatus) {
+      callback(this.openClawStatus);
+    }
+    return () => {
+      this.openClawStatusListeners.delete(callback);
+    };
+  }
+
+  async getOpenClawEngineStatus(): Promise<OpenClawEngineStatus | null> {
+    return this.loadOpenClawEngineStatus();
+  }
+
+  async installOpenClawEngine(): Promise<OpenClawEngineStatus | null> {
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.install) {
+      return null;
+    }
+    const result = await engineApi.install();
+    if (result?.status) {
+      this.notifyOpenClawStatus(result.status);
+      return result.status;
+    }
+    return this.openClawStatus;
+  }
+
+  async retryOpenClawInstall(): Promise<OpenClawEngineStatus | null> {
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.retryInstall) {
+      return null;
+    }
+    const result = await engineApi.retryInstall();
+    if (result?.status) {
+      this.notifyOpenClawStatus(result.status);
+      return result.status;
+    }
+    return this.openClawStatus;
+  }
+
+  async restartOpenClawGateway(): Promise<OpenClawEngineStatus | null> {
+    const engineApi = window.electron?.openclaw?.engine;
+    if (!engineApi?.restartGateway) {
+      return null;
+    }
+    const result = await engineApi.restartGateway();
+    if (result?.status) {
+      this.notifyOpenClawStatus(result.status);
+      return result.status;
+    }
+    return this.openClawStatus;
   }
 
   async generateSessionTitle(prompt: string | null): Promise<string | null> {
@@ -567,6 +764,7 @@ class CoworkService {
 
   destroy(): void {
     this.cleanupListeners();
+    this.openClawStatusListeners.clear();
     this.initialized = false;
   }
 }

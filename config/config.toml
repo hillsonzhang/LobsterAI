@@ -1,0 +1,26 @@
+# MSET 配置文件
+# 此文件用于配置 MSET 工具的各种设置
+[versions]
+python = "3.12.10"
+node = "24.1.0"
+uv = "0.7.11"
+
+[directories]
+python = "python-3.12.10"
+node = "node-v22.16.0"
+uv = "uv-0.7.11"
+
+[download_urls]
+python_url = "https://www.python.org/ftp/python/{{{{version}}}}/python-{{{{version}}}}-embed-{{{{arch}}}}.zip"
+node_url = "https://nodejs.org/dist/v{{{{version}}}}/node-v{{{{version}}}}-win-x64.zip"
+uv_urls = [
+    "https://github.com/astral-sh/uv/releases/download/{{{{version}}}}/uv-{{{{arch}}}}-pc-windows-msvc.zip",
+    "https://github.com/astral-sh/uv/releases/download/v{{{{version}}}}/uv-{{{{arch}}}}-pc-windows-msvc.zip"
+]
+
+[logging]
+enabled = true
+log_dir = "logs"
+log_level = "info"
+max_file_size_mb = 10
+max_files = 5

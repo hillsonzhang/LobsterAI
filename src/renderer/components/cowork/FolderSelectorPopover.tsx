@@ -63,12 +63,16 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
   const submenuRef = useRef<HTMLDivElement>(null);
   const recentFoldersRef = useRef<HTMLDivElement>(null);
   const tooltipTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const submenuCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Cleanup tooltip timer on unmount
+  // Cleanup timers on unmount
   useEffect(() => {
     return () => {
       if (tooltipTimerRef.current) {
         clearTimeout(tooltipTimerRef.current);
+      }
+      if (submenuCloseTimerRef.current) {
+        clearTimeout(submenuCloseTimerRef.current);
       }
     };
   }, []);
@@ -91,11 +95,15 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
       loadRecentFolders();
     } else {
       setShowRecentSubmenu(false);
-      // Clear tooltip when popover closes
+      // Clear tooltip and submenu timer when popover closes
       setTooltipState({ visible: false, path: '', rect: null });
       if (tooltipTimerRef.current) {
         clearTimeout(tooltipTimerRef.current);
         tooltipTimerRef.current = null;
+      }
+      if (submenuCloseTimerRef.current) {
+        clearTimeout(submenuCloseTimerRef.current);
+        submenuCloseTimerRef.current = null;
       }
     }
   }, [isOpen]);
@@ -144,12 +152,21 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
     }
   }, [showRecentSubmenu]);
 
+  const isWindowsDriveRoot = (dirPath: string): boolean => {
+    if (window.electron.platform !== 'win32') return false;
+    return /^[a-zA-Z]:[/\\]?$/.test(dirPath.trim());
+  };
+
   const handleAddFolder = async () => {
+    onClose();
     try {
       const result = await window.electron.dialog.selectDirectory();
       if (result.success && result.path) {
+        if (isWindowsDriveRoot(result.path)) {
+          window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('folderDriveRootNotAllowed') }));
+          return;
+        }
         onSelectFolder(result.path);
-        onClose();
       }
     } catch (error) {
       console.error('Failed to select directory:', error);
@@ -157,6 +174,10 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
   };
 
   const handleSelectRecentFolder = (path: string) => {
+    if (isWindowsDriveRoot(path)) {
+      window.dispatchEvent(new CustomEvent('app:showToast', { detail: i18nService.t('folderDriveRootNotAllowed') }));
+      return;
+    }
     onSelectFolder(path);
     onClose();
   };
@@ -190,6 +211,24 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
     return getCompactFolderName(path, maxLength) || i18nService.t('noFolderSelected');
   };
 
+  const handleSubmenuMouseEnter = useCallback(() => {
+    if (submenuCloseTimerRef.current) {
+      clearTimeout(submenuCloseTimerRef.current);
+      submenuCloseTimerRef.current = null;
+    }
+    setShowRecentSubmenu(true);
+  }, []);
+
+  const handleSubmenuMouseLeave = useCallback(() => {
+    if (submenuCloseTimerRef.current) {
+      clearTimeout(submenuCloseTimerRef.current);
+    }
+    submenuCloseTimerRef.current = setTimeout(() => {
+      setShowRecentSubmenu(false);
+      submenuCloseTimerRef.current = null;
+    }, 150);
+  }, []);
+
   if (!isOpen) return null;
 
   return (
@@ -212,8 +251,8 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
         <div
           ref={recentFoldersRef}
           className="relative"
-          onMouseEnter={() => setShowRecentSubmenu(true)}
-          onMouseLeave={() => setShowRecentSubmenu(false)}
+          onMouseEnter={handleSubmenuMouseEnter}
+          onMouseLeave={handleSubmenuMouseLeave}
         >
           <button
             className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm text-claude-text hover:bg-claude-surfaceHover transition-colors rounded-b-lg"
@@ -233,8 +272,8 @@ const FolderSelectorPopover: React.FC<FolderSelectorPopoverProps> = ({
           ref={submenuRef}
           className="fixed w-64 max-h-80 overflow-y-auto rounded-lg border border-claude-border bg-claude-surface shadow-lg z-[60]"
           style={{ top: submenuPosition.top, left: submenuPosition.left }}
-          onMouseEnter={() => setShowRecentSubmenu(true)}
-          onMouseLeave={() => setShowRecentSubmenu(false)}
+          onMouseEnter={handleSubmenuMouseEnter}
+          onMouseLeave={handleSubmenuMouseLeave}
         >
           {isLoading ? (
             <div className="px-3 py-2.5 text-sm text-claude-textSecondary">

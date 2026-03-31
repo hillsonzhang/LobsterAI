@@ -3,18 +3,23 @@
  * Types for DingTalk, Feishu and Telegram IM bot integration
  */
 
-// ==================== DingTalk Types ====================
+import type { Platform } from '../../shared/platform';
+export type { Platform } from '../../shared/platform';
 
-export interface DingTalkConfig {
+export interface DingTalkOpenClawConfig {
   enabled: boolean;
   clientId: string;
   clientSecret: string;
-  robotCode?: string;
-  corpId?: string;
-  agentId?: string;
-  messageType: 'markdown' | 'card';
-  cardTemplateId?: string;
-  debug?: boolean;
+  dmPolicy: 'open' | 'pairing' | 'allowlist';
+  allowFrom: string[];
+  groupPolicy: 'open' | 'allowlist';
+  /** @deprecated since dingtalk-connector v0.7.5 – use Gateway session.reset.idleMinutes instead */
+  sessionTimeout: number;
+  separateSessionByConversation: boolean;
+  groupSessionScope: 'group' | 'group_sender';
+  sharedMemoryAcrossConversations: boolean;
+  gatewayBaseUrl: string;
+  debug: boolean;
 }
 
 export interface DingTalkGatewayStatus {
@@ -25,39 +30,28 @@ export interface DingTalkGatewayStatus {
   lastOutboundAt: number | null;
 }
 
-export interface DingTalkInboundMessage {
-  msgId: string;
-  msgtype: 'text' | 'richText' | 'audio' | string;
-  createAt: number;
-  text?: { content: string };
-  content?: {
-    downloadCode?: string;
-    fileName?: string;
-    recognition?: string;
-    richText?: Array<{ text?: string }>;
-    duration?: string;
-    videoType?: string;
-  };
-  conversationType: '1' | '2'; // 1: DM, 2: Group
-  conversationId: string;
-  senderId: string;
-  senderStaffId?: string;
-  senderNick?: string;
-  chatbotUserId: string;
-  sessionWebhook: string;
-}
-
 // ==================== Feishu Types ====================
 
-export interface FeishuConfig {
+export interface FeishuOpenClawGroupConfig {
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
+
+export interface FeishuOpenClawConfig {
   enabled: boolean;
   appId: string;
   appSecret: string;
   domain: 'feishu' | 'lark' | string;
-  encryptKey?: string;
-  verificationToken?: string;
-  renderMode: 'text' | 'card';
-  debug?: boolean;
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupAllowFrom: string[];
+  groups: Record<string, FeishuOpenClawGroupConfig>;
+  historyLimit: number;
+  replyMode: 'auto' | 'static' | 'streaming';
+  mediaMaxMb: number;
+  debug: boolean;
 }
 
 export interface FeishuGatewayStatus {
@@ -69,30 +63,31 @@ export interface FeishuGatewayStatus {
   lastOutboundAt: number | null;
 }
 
-export interface FeishuMessageContext {
-  chatId: string;
-  messageId: string;
-  senderId: string;
-  senderOpenId: string;
-  chatType: 'p2p' | 'group';
-  mentionedBot: boolean;
-  rootId?: string;
-  parentId?: string;
-  content: string;
-  contentType: string;
-  mediaKey?: string;
-  mediaType?: string;
-  mediaFileName?: string;
-  mediaDuration?: number;
-}
-
 // ==================== Telegram Types ====================
 
-export interface TelegramConfig {
+export interface TelegramOpenClawGroupConfig {
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
+
+export interface TelegramOpenClawConfig {
   enabled: boolean;
   botToken: string;
-  allowedUserIds?: string[];
-  debug?: boolean;
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupAllowFrom: string[];
+  groups: Record<string, TelegramOpenClawGroupConfig>;
+  historyLimit: number;
+  replyToMode: 'off' | 'first' | 'all';
+  linkPreview: boolean;
+  streaming: 'off' | 'partial' | 'block' | 'progress';
+  mediaMaxMb: number;
+  proxy: string;
+  webhookUrl: string;
+  webhookSecret: string;
+  debug: boolean;
 }
 
 export interface TelegramGatewayStatus {
@@ -106,10 +101,25 @@ export interface TelegramGatewayStatus {
 
 // ==================== Discord Types ====================
 
-export interface DiscordConfig {
+export interface DiscordOpenClawGuildConfig {
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
+
+export interface DiscordOpenClawConfig {
   enabled: boolean;
   botToken: string;
-  debug?: boolean;
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupAllowFrom: string[];
+  guilds: Record<string, DiscordOpenClawGuildConfig>;
+  historyLimit: number;
+  streaming: 'off' | 'partial' | 'block' | 'progress';
+  mediaMaxMb: number;
+  proxy: string;
+  debug: boolean;
 }
 
 export interface DiscordGatewayStatus {
@@ -127,19 +137,36 @@ export interface DiscordGatewayStatus {
 export type NimTeamPolicy = 'open' | 'allowlist' | 'disabled';
 export type NimSessionType = 'p2p' | 'team' | 'superTeam';
 
+export interface NimP2pConfig {
+  policy: 'open' | 'allowlist' | 'disabled';
+  allowFrom?: (string | number)[];
+}
+
+export interface NimTeamConfig {
+  policy: 'open' | 'allowlist' | 'disabled';
+  allowFrom?: (string | number)[];
+}
+
+export interface NimQChatConfig {
+  policy: 'open' | 'allowlist' | 'disabled';
+  allowFrom?: (string | number)[];
+}
+
+export interface NimAdvancedConfig {
+  mediaMaxMb?: number;
+  textChunkLimit?: number;
+  debug?: boolean;
+}
+
 export interface NimConfig {
   enabled: boolean;
   appKey: string;
   account: string;
   token: string;
-  accountWhitelist: string;
-  debug?: boolean;
-  // 群组消息配置
-  teamPolicy?: NimTeamPolicy;      // 群消息策略，默认 'disabled'
-  teamAllowlist?: string;          // 逗号分隔的群 ID 白名单
-  // QChat 圈组配置
-  qchatEnabled?: boolean;          // 是否启用圈组
-  qchatServerIds?: string;         // 逗号分隔的服务器 ID，空则自动发现
+  p2p?: NimP2pConfig;
+  team?: NimTeamConfig;
+  qchat?: NimQChatConfig;
+  advanced?: NimAdvancedConfig;
 }
 
 export interface NimGatewayStatus {
@@ -151,16 +178,16 @@ export interface NimGatewayStatus {
   lastOutboundAt: number | null;
 }
 
-// ==================== Xiaomifeng (小蜜蜂) Types ====================
+// ==================== NeteaseBee (小蜜蜂) Types ====================
 
-export interface XiaomifengConfig {
+export interface NeteaseBeeChanConfig {
   enabled: boolean;
-  clientId: string;    // 用于 NIM 登录的账号 (appKey)
-  secret: string;      // 用于 NIM 登录的 token (appSecret)
+  clientId: string;    // NIM 登录账号
+  secret: string;      // NIM 登录 token
   debug?: boolean;
 }
 
-export interface XiaomifengGatewayStatus {
+export interface NeteaseBeeChanGatewayStatus {
   connected: boolean;
   startedAt: number | null;
   lastError: string | null;
@@ -171,12 +198,22 @@ export interface XiaomifengGatewayStatus {
 
 // ==================== QQ Types ====================
 
-export interface QQConfig {
+export interface QQOpenClawConfig {
   enabled: boolean;
   appId: string;
   appSecret: string;
-  debug?: boolean;
+  dmPolicy: 'open' | 'pairing' | 'allowlist';
+  allowFrom: string[];
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
+  groupAllowFrom: string[];
+  historyLimit: number;
+  markdownSupport: boolean;
+  imageServerBaseUrl: string;
+  debug: boolean;
 }
+
+/** @deprecated Use QQOpenClawConfig instead */
+export type QQConfig = QQOpenClawConfig;
 
 export interface QQGatewayStatus {
   connected: boolean;
@@ -188,12 +225,20 @@ export interface QQGatewayStatus {
 
 // ==================== WeCom (企业微信) Types ====================
 
-export interface WecomConfig {
+export interface WecomOpenClawConfig {
   enabled: boolean;
   botId: string;
   secret: string;
-  debug?: boolean;
+  dmPolicy: 'open' | 'pairing' | 'allowlist' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
+  groupAllowFrom: string[];
+  sendThinkingMessage: boolean;
+  debug: boolean;
 }
+
+/** @deprecated Use WecomOpenClawConfig instead */
+export type WecomConfig = WecomOpenClawConfig;
 
 export interface WecomGatewayStatus {
   connected: boolean;
@@ -204,25 +249,76 @@ export interface WecomGatewayStatus {
   lastOutboundAt: number | null;
 }
 
+// ==================== POPO Types ====================
+
+export interface PopoOpenClawConfig {
+  enabled: boolean;
+  connectionMode: 'websocket' | 'webhook';
+  appKey: string;
+  appSecret: string;
+  token: string;
+  aesKey: string;
+  webhookBaseUrl: string;
+  webhookPath: string;
+  webhookPort: number;
+  dmPolicy: 'open' | 'pairing' | 'allowlist' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
+  groupAllowFrom: string[];
+  textChunkLimit: number;
+  richTextChunkLimit: number;
+  debug: boolean;
+}
+
+export interface PopoGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
+// ==================== Weixin (微信) Types ====================
+
+export interface WeixinOpenClawConfig {
+  enabled: boolean;
+  accountId: string;
+  dmPolicy: 'open' | 'pairing' | 'allowlist' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
+  groupAllowFrom: string[];
+  debug: boolean;
+}
+
+export interface WeixinGatewayStatus {
+  connected: boolean;
+  startedAt: number | null;
+  lastError: string | null;
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+}
+
 // ==================== Common IM Types ====================
 
-export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' | 'nim' | 'xiaomifeng' | 'wecom';
-
 export interface IMGatewayConfig {
-  dingtalk: DingTalkConfig;
-  feishu: FeishuConfig;
-  qq: QQConfig;
-  telegram: TelegramConfig;
-  discord: DiscordConfig;
+  dingtalk: DingTalkOpenClawConfig;
+  feishu: FeishuOpenClawConfig;
+  telegram: TelegramOpenClawConfig;
+  qq: QQOpenClawConfig;
+  discord: DiscordOpenClawConfig;
   nim: NimConfig;
-  xiaomifeng: XiaomifengConfig;
-  wecom: WecomConfig;
+  'netease-bee': NeteaseBeeChanConfig;
+  wecom: WecomOpenClawConfig;
+  popo: PopoOpenClawConfig;
+  weixin: WeixinOpenClawConfig;
   settings: IMSettings;
 }
 
 export interface IMSettings {
   systemPrompt?: string;
   skillsEnabled: boolean;
+  /** Per-platform agent binding. Key = platform name, value = agent ID. Absent or 'main' = default. */
+  platformAgentBindings?: Record<string, string>;
 }
 
 export interface IMGatewayStatus {
@@ -232,8 +328,10 @@ export interface IMGatewayStatus {
   telegram: TelegramGatewayStatus;
   discord: DiscordGatewayStatus;
   nim: NimGatewayStatus;
-  xiaomifeng: XiaomifengGatewayStatus;
+  'netease-bee': NeteaseBeeChanGatewayStatus;
   wecom: WecomGatewayStatus;
+  popo: PopoGatewayStatus;
+  weixin: WeixinGatewayStatus;
 }
 
 // ==================== Media Attachment Types ====================
@@ -252,7 +350,7 @@ export interface IMMediaAttachment {
 }
 
 export interface IMMessage {
-  platform: IMPlatform;
+  platform: Platform;
   messageId: string;
   conversationId: string;
   senderId: string;
@@ -268,7 +366,7 @@ export interface IMMessage {
 }
 
 export interface IMReplyContext {
-  platform: IMPlatform;
+  platform: Platform;
   conversationId: string;
   messageId?: string;
   // DingTalk specific
@@ -281,8 +379,9 @@ export interface IMReplyContext {
 
 export interface IMSessionMapping {
   imConversationId: string;
-  platform: IMPlatform;
+  platform: Platform;
   coworkSessionId: string;
+  agentId: string;
   createdAt: number;
   lastActiveAt: number;
 }
@@ -325,6 +424,7 @@ export type IMConnectivityCheckCode =
   | 'telegram_privacy_mode_hint'
   | 'dingtalk_bot_membership_hint'
   | 'nim_p2p_only_hint'
+  | 'openclaw_gateway_not_running'
   | 'qq_guild_mention_hint';
 
 export interface IMConnectivityCheck {
@@ -335,7 +435,7 @@ export interface IMConnectivityCheck {
 }
 
 export interface IMConnectivityTestResult {
-  platform: IMPlatform;
+  platform: Platform;
   testedAt: number;
   verdict: IMConnectivityVerdict;
   checks: IMConnectivityCheck[];
@@ -349,34 +449,50 @@ export interface IMConnectivityTestResponse {
 
 // ==================== Default Configurations ====================
 
-export const DEFAULT_DINGTALK_CONFIG: DingTalkConfig = {
+export const DEFAULT_DINGTALK_OPENCLAW_CONFIG: DingTalkOpenClawConfig = {
   enabled: false,
   clientId: '',
   clientSecret: '',
-  messageType: 'markdown',
-  debug: true,
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'open',
+  sessionTimeout: 1800000,
+  separateSessionByConversation: true,
+  groupSessionScope: 'group',
+  sharedMemoryAcrossConversations: false,
+  gatewayBaseUrl: '',
+  debug: false,
 };
 
-export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
+export const DEFAULT_FEISHU_OPENCLAW_CONFIG: FeishuOpenClawConfig = {
   enabled: false,
   appId: '',
   appSecret: '',
   domain: 'feishu',
-  renderMode: 'card',
-  debug: true,
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'allowlist',
+  groupAllowFrom: [],
+  groups: { '*': { requireMention: true } },
+  historyLimit: 50,
+  replyMode: 'auto',
+  mediaMaxMb: 30,
+  debug: false,
 };
 
-export const DEFAULT_TELEGRAM_CONFIG: TelegramConfig = {
+export const DEFAULT_DISCORD_OPENCLAW_CONFIG: DiscordOpenClawConfig = {
   enabled: false,
   botToken: '',
-  allowedUserIds: [],
-  debug: true,
-};
-
-export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
-  enabled: false,
-  botToken: '',
-  debug: true,
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'allowlist',
+  groupAllowFrom: [],
+  guilds: { '*': { requireMention: true } },
+  historyLimit: 50,
+  streaming: 'off',
+  mediaMaxMb: 25,
+  proxy: '',
+  debug: false,
 };
 
 export const DEFAULT_NIM_CONFIG: NimConfig = {
@@ -384,32 +500,86 @@ export const DEFAULT_NIM_CONFIG: NimConfig = {
   appKey: '',
   account: '',
   token: '',
-  accountWhitelist: '',
-  debug: true,
-  teamPolicy: 'disabled',
-  teamAllowlist: '',
-  qchatEnabled: false,
-  qchatServerIds: '',
 };
 
-export const DEFAULT_XIAOMIFENG_CONFIG: XiaomifengConfig = {
+export const DEFAULT_NETEASE_BEE_CONFIG: NeteaseBeeChanConfig = {
   enabled: false,
   clientId: '',
   secret: '',
   debug: true,
 };
 
-export const DEFAULT_QQ_CONFIG: QQConfig = {
+export const DEFAULT_TELEGRAM_OPENCLAW_CONFIG: TelegramOpenClawConfig = {
+  enabled: false,
+  botToken: '',
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'allowlist',
+  groupAllowFrom: [],
+  groups: { '*': { requireMention: true } },
+  historyLimit: 50,
+  replyToMode: 'off',
+  linkPreview: true,
+  streaming: 'off',
+  mediaMaxMb: 5,
+  proxy: '',
+  webhookUrl: '',
+  webhookSecret: '',
+  debug: false,
+};
+
+export const DEFAULT_QQ_CONFIG: QQOpenClawConfig = {
   enabled: false,
   appId: '',
   appSecret: '',
-  debug: true,
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'open',
+  groupAllowFrom: [],
+  historyLimit: 50,
+  markdownSupport: true,
+  imageServerBaseUrl: '',
+  debug: false,
 };
 
-export const DEFAULT_WECOM_CONFIG: WecomConfig = {
+export const DEFAULT_WECOM_CONFIG: WecomOpenClawConfig = {
   enabled: false,
   botId: '',
   secret: '',
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'open',
+  groupAllowFrom: [],
+  sendThinkingMessage: true,
+  debug: true,
+};
+
+export const DEFAULT_POPO_CONFIG: PopoOpenClawConfig = {
+  enabled: false,
+  connectionMode: 'websocket',
+  appKey: '',
+  appSecret: '',
+  token: '',
+  aesKey: '',
+  webhookBaseUrl: '',
+  webhookPath: '/popo/callback',
+  webhookPort: 3100,
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'open',
+  groupAllowFrom: [],
+  textChunkLimit: 3000,
+  richTextChunkLimit: 5000,
+  debug: true,
+};
+
+export const DEFAULT_WEIXIN_CONFIG: WeixinOpenClawConfig = {
+  enabled: false,
+  accountId: '',
+  dmPolicy: 'open',
+  allowFrom: [],
+  groupPolicy: 'open',
+  groupAllowFrom: [],
   debug: true,
 };
 
@@ -419,14 +589,16 @@ export const DEFAULT_IM_SETTINGS: IMSettings = {
 };
 
 export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
-  dingtalk: DEFAULT_DINGTALK_CONFIG,
-  feishu: DEFAULT_FEISHU_CONFIG,
+  dingtalk: DEFAULT_DINGTALK_OPENCLAW_CONFIG,
+  feishu: DEFAULT_FEISHU_OPENCLAW_CONFIG,
+  telegram: DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
   qq: DEFAULT_QQ_CONFIG,
-  telegram: DEFAULT_TELEGRAM_CONFIG,
-  discord: DEFAULT_DISCORD_CONFIG,
+  discord: DEFAULT_DISCORD_OPENCLAW_CONFIG,
   nim: DEFAULT_NIM_CONFIG,
-  xiaomifeng: DEFAULT_XIAOMIFENG_CONFIG,
+  'netease-bee': DEFAULT_NETEASE_BEE_CONFIG,
   wecom: DEFAULT_WECOM_CONFIG,
+  popo: DEFAULT_POPO_CONFIG,
+  weixin: DEFAULT_WEIXIN_CONFIG,
   settings: DEFAULT_IM_SETTINGS,
 };
 
@@ -443,15 +615,6 @@ export const DEFAULT_FEISHU_STATUS: FeishuGatewayStatus = {
   startedAt: null,
   botOpenId: null,
   error: null,
-  lastInboundAt: null,
-  lastOutboundAt: null,
-};
-
-export const DEFAULT_TELEGRAM_STATUS: TelegramGatewayStatus = {
-  connected: false,
-  startedAt: null,
-  lastError: null,
-  botUsername: null,
   lastInboundAt: null,
   lastOutboundAt: null,
 };
@@ -475,7 +638,7 @@ export const DEFAULT_NIM_STATUS: NimGatewayStatus = {
   lastOutboundAt: null,
 };
 
-export const DEFAULT_XIAOMIFENG_STATUS: XiaomifengGatewayStatus = {
+export const DEFAULT_NETEASE_BEE_STATUS: NeteaseBeeChanGatewayStatus = {
   connected: false,
   startedAt: null,
   lastError: null,
@@ -501,45 +664,43 @@ export const DEFAULT_WECOM_STATUS: WecomGatewayStatus = {
   lastOutboundAt: null,
 };
 
+export const DEFAULT_POPO_STATUS: PopoGatewayStatus = {
+  connected: false,
+  startedAt: null,
+  lastError: null,
+  lastInboundAt: null,
+  lastOutboundAt: null,
+};
+
+export const DEFAULT_WEIXIN_STATUS: WeixinGatewayStatus = {
+  connected: false,
+  startedAt: null,
+  lastError: null,
+  lastInboundAt: null,
+  lastOutboundAt: null,
+};
+
 export const DEFAULT_IM_STATUS: IMGatewayStatus = {
   dingtalk: DEFAULT_DINGTALK_STATUS,
   feishu: DEFAULT_FEISHU_STATUS,
+  telegram: {
+    connected: false,
+    startedAt: null,
+    lastError: null,
+    botUsername: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+  },
   qq: DEFAULT_QQ_STATUS,
-  telegram: DEFAULT_TELEGRAM_STATUS,
   discord: DEFAULT_DISCORD_STATUS,
   nim: DEFAULT_NIM_STATUS,
-  xiaomifeng: DEFAULT_XIAOMIFENG_STATUS,
+  'netease-bee': DEFAULT_NETEASE_BEE_STATUS,
   wecom: DEFAULT_WECOM_STATUS,
+  popo: DEFAULT_POPO_STATUS,
+  weixin: DEFAULT_WEIXIN_STATUS,
 };
 
-// ==================== DingTalk Media Types ====================
-
-// Session Webhook 使用 msgKey + msgParam 格式
-export interface DingTalkImageMessage {
-  msgKey: 'sampleImageMsg';
-  sampleImageMsg: { photoURL: string };
-}
-
-export interface DingTalkVoiceMessage {
-  msgKey: 'sampleAudio';
-  sampleAudio: { mediaId: string; duration?: string };
-}
-
-export interface DingTalkVideoMessage {
-  msgKey: 'sampleVideo';
-  sampleVideo: { mediaId: string; duration?: string; videoType?: string };
-}
-
-export interface DingTalkFileMessage {
-  msgKey: 'sampleFile';
-  sampleFile: { mediaId: string; fileName?: string };
-}
-
-export type DingTalkMediaMessage =
-  | DingTalkImageMessage
-  | DingTalkVoiceMessage
-  | DingTalkVideoMessage
-  | DingTalkFileMessage;
+// ==================== Media Marker Types ====================
 
 export interface MediaMarker {
   type: 'image' | 'video' | 'audio' | 'file';

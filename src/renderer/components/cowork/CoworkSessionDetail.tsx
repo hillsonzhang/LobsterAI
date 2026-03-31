@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
@@ -18,16 +19,18 @@ import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import LazyRenderTurn, { clearHeightCache } from './LazyRenderTurn';
 import PuzzleIcon from '../icons/PuzzleIcon';
 import EllipsisHorizontalIcon from '../icons/EllipsisHorizontalIcon';
 import PencilSquareIcon from '../icons/PencilSquareIcon';
 import TrashIcon from '../icons/TrashIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
+import { getScheduledReminderDisplayText } from '../../../scheduledTask/reminderText';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
-  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => void;
+  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
   onNavigateHome?: () => void;
   isSidebarCollapsed?: boolean;
@@ -37,8 +40,7 @@ interface CoworkSessionDetailProps {
 }
 
 const AUTO_SCROLL_THRESHOLD = 120;
-const NAV_HIDE_DELAY = 3000;
-const NAV_SCROLL_LOCK_DURATION = 500;
+const NAV_SCROLL_LOCK_DURATION = 800;
 const NAV_BOTTOM_SNAP_THRESHOLD = 20;
 const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 
@@ -126,9 +128,115 @@ type ParsedTodoItem = {
 
 const normalizeToolName = (value: string): string => value.toLowerCase().replace(/[\s_]+/g, '');
 
+const TOOL_USE_ERROR_TAG_PATTERN = /^<tool_use_error>([\s\S]*?)<\/tool_use_error>$/i;
+const ANSI_ESCAPE_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+const getToolDisplayName = (toolName: string | undefined): string => {
+  if (!toolName) return 'Tool';
+  const normalized = normalizeToolName(toolName);
+  switch (normalized) {
+    case 'cron':
+      return 'Cron';
+    case 'exec':
+    case 'bash':
+    case 'shell':
+      return 'Bash';
+    case 'read':
+    case 'readfile':
+      return 'Read';
+    case 'write':
+    case 'writefile':
+      return 'Write';
+    case 'edit':
+    case 'editfile':
+      return 'Edit';
+    case 'multiedit':
+      return 'MultiEdit';
+    case 'process':
+      return 'Process';
+    default:
+      return toolName;
+  }
+};
+
+const isBashLikeToolName = (toolName: string | undefined): boolean => {
+  if (!toolName) return false;
+  const normalized = normalizeToolName(toolName);
+  return normalized === 'bash' || normalized === 'exec' || normalized === 'shell';
+};
+
+const getToolInputString = (
+  input: Record<string, unknown>,
+  keys: string[],
+): string | null => {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+};
+
+const truncatePreview = (value: string, maxLength = 120): string =>
+  value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+
+const normalizeToolResultText = (value: string): string => {
+  const withoutAnsi = value.replace(ANSI_ESCAPE_PATTERN, '');
+  const errorTagMatch = withoutAnsi.trim().match(TOOL_USE_ERROR_TAG_PATTERN);
+  return errorTagMatch ? errorTagMatch[1].trim() : withoutAnsi;
+};
+
 const isTodoWriteToolName = (toolName: string | undefined): boolean => {
   if (!toolName) return false;
   return normalizeToolName(toolName) === 'todowrite';
+};
+
+const isCronToolName = (toolName: string | undefined): boolean => {
+  if (!toolName) return false;
+  return normalizeToolName(toolName) === 'cron';
+};
+
+const getCronToolSummary = (input: Record<string, unknown>): string | null => {
+  const action = getToolInputString(input, ['action']);
+  if (!action) return null;
+
+  const job = input.job && typeof input.job === 'object'
+    ? input.job as Record<string, unknown>
+    : null;
+  const jobName = job
+    ? getToolInputString(job, ['name', 'id'])
+    : null;
+  const jobId = getToolInputString(input, ['jobId', 'id'])
+    ?? (job ? getToolInputString(job, ['id']) : null);
+  const wakeText = getToolInputString(input, ['text']);
+
+  switch (action) {
+    case 'add':
+      return [action, jobName ?? jobId].filter(Boolean).join(' · ');
+    case 'update':
+    case 'remove':
+    case 'run':
+    case 'runs':
+      return [action, jobId ?? jobName].filter(Boolean).join(' · ');
+    case 'wake':
+      return [action, wakeText].filter(Boolean).join(' · ');
+    default:
+      return action;
+  }
+};
+
+const formatStructuredText = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return value;
+  }
 };
 
 const toTrimmedString = (value: unknown): string | null => (
@@ -205,23 +313,42 @@ const getToolInputSummary = (
     return items ? getTodoWriteSummary(items) : null;
   }
 
-  switch (toolName) {
-    case 'Bash':
-      return typeof input.command === 'string'
-        ? input.command
-        : getStringArray(input.commands);
-    case 'Read':
-    case 'Write':
-    case 'Edit':
-    case 'MultiEdit':
-      return typeof input.file_path === 'string' ? input.file_path : null;
-    case 'Glob':
-    case 'Grep':
-      return typeof input.pattern === 'string' ? input.pattern : null;
-    case 'Task':
-      return typeof input.description === 'string' ? input.description : null;
-    case 'WebFetch':
-      return typeof input.url === 'string' ? input.url : null;
+  const normalizedToolName = normalizeToolName(toolName);
+
+  switch (normalizedToolName) {
+    case 'cron':
+      return getCronToolSummary(input);
+    case 'bash':
+    case 'exec':
+    case 'shell':
+      return getToolInputString(input, ['command', 'cmd', 'script'])
+        ?? getStringArray(input.commands);
+    case 'read':
+    case 'readfile':
+    case 'write':
+    case 'writefile':
+    case 'edit':
+    case 'editfile':
+    case 'multiedit':
+      return getToolInputString(input, ['file_path', 'path', 'filePath', 'target_file', 'targetFile'])
+        ?? (
+          typeof input.content === 'string' && input.content.trim()
+            ? truncatePreview(input.content.split('\n')[0].trim())
+            : null
+        );
+    case 'glob':
+    case 'grep':
+      return getToolInputString(input, ['pattern', 'query']);
+    case 'task':
+      return getToolInputString(input, ['description', 'task']);
+    case 'webfetch':
+      return getToolInputString(input, ['url']);
+    case 'process': {
+      const action = getToolInputString(input, ['action']);
+      const sessionId = getToolInputString(input, ['sessionId', 'session_id']);
+      if (action && sessionId) return `${action} · ${sessionId}`;
+      return action ?? sessionId;
+    }
     default:
       return null;
   }
@@ -244,13 +371,13 @@ const hasText = (value: unknown): value is string =>
 
 const getToolResultDisplay = (message: CoworkMessage): string => {
   if (hasText(message.content)) {
-    return message.content;
+    return formatStructuredText(normalizeToolResultText(message.content));
   }
   if (hasText(message.metadata?.toolResult)) {
-    return message.metadata?.toolResult ?? '';
+    return formatStructuredText(normalizeToolResultText(message.metadata?.toolResult ?? ''));
   }
   if (hasText(message.metadata?.error)) {
-    return message.metadata?.error ?? '';
+    return formatStructuredText(normalizeToolResultText(message.metadata?.error ?? ''));
   }
   return '';
 };
@@ -280,64 +407,6 @@ const isAbsolutePath = (value: string): boolean => (
 );
 
 const isRelativePath = (value: string): boolean => !isAbsolutePath(value) && !hasScheme(value);
-const SANDBOX_WORKSPACE_GUEST_ROOT = '/workspace/project';
-const SANDBOX_WORKSPACE_LEGACY_ROOT = '/workspace';
-const SANDBOX_WORKSPACE_RESERVED_DIRS = new Set(['skills', 'ipc', 'tmp']);
-const SANDBOX_WORKSPACE_PATH_PATTERN = /\/workspace(?:\/project)?(?:\/[^\s'"`)\]}>,;:!?]*)?/g;
-
-const isReservedSandboxSegment = (relativePath: string): boolean => {
-  const [firstSegment] = relativePath.split('/');
-  return Boolean(firstSegment && SANDBOX_WORKSPACE_RESERVED_DIRS.has(firstSegment.toLowerCase()));
-};
-
-const mapSandboxGuestPathToCwd = (filePath: string, cwd?: string): string | null => {
-  if (!cwd) return null;
-
-  const normalizedPath = filePath.replace(/\\/g, '/');
-  const normalizedCwd = cwd.replace(/[\\/]+$/, '');
-
-  if (
-    normalizedPath === SANDBOX_WORKSPACE_GUEST_ROOT
-    || normalizedPath.startsWith(`${SANDBOX_WORKSPACE_GUEST_ROOT}/`)
-  ) {
-    const relativePath = normalizedPath
-      .slice(SANDBOX_WORKSPACE_GUEST_ROOT.length)
-      .replace(/^\/+/, '');
-    if (relativePath && isReservedSandboxSegment(relativePath)) {
-      return null;
-    }
-    return relativePath ? `${normalizedCwd}/${relativePath}` : normalizedCwd;
-  }
-
-  if (
-    normalizedPath !== SANDBOX_WORKSPACE_LEGACY_ROOT
-    && !normalizedPath.startsWith(`${SANDBOX_WORKSPACE_LEGACY_ROOT}/`)
-  ) {
-    return null;
-  }
-
-  const legacyRelativePath = normalizedPath
-    .slice(SANDBOX_WORKSPACE_LEGACY_ROOT.length)
-    .replace(/^\/+/, '');
-  if (!legacyRelativePath) {
-    return normalizedCwd;
-  }
-
-  if (isReservedSandboxSegment(legacyRelativePath)) {
-    return null;
-  }
-
-  return `${normalizedCwd}/${legacyRelativePath}`;
-};
-
-const mapSandboxGuestPathsInText = (value: string, cwd?: string): string => {
-  if (!value || !cwd || !value.includes('/workspace')) {
-    return value;
-  }
-
-  return value.replace(SANDBOX_WORKSPACE_PATH_PATTERN, (candidatePath) =>
-    mapSandboxGuestPathToCwd(candidatePath, cwd) ?? candidatePath);
-};
 
 const parseRootRelativePath = (value: string): string | null => {
   const trimmed = value.trim();
@@ -391,29 +460,29 @@ const toAbsolutePathFromCwd = (filePath: string, cwd: string): string => {
   return `${cwd.replace(/\/$/, '')}/${filePath.replace(/^\.\//, '')}`;
 };
 
-type ToolGroupItem = {
+export type ToolGroupItem = {
   type: 'tool_group';
   toolUse: CoworkMessage;
   toolResult?: CoworkMessage | null;
 };
 
-type DisplayItem =
+export type DisplayItem =
   | { type: 'message'; message: CoworkMessage }
   | ToolGroupItem;
 
-type AssistantTurnItem =
+export type AssistantTurnItem =
   | { type: 'assistant'; message: CoworkMessage }
   | { type: 'system'; message: CoworkMessage }
   | { type: 'tool_group'; group: ToolGroupItem }
   | { type: 'tool_result'; message: CoworkMessage };
 
-type ConversationTurn = {
+export type ConversationTurn = {
   id: string;
   userMessage: CoworkMessage | null;
   assistantItems: AssistantTurnItem[];
 };
 
-const buildDisplayItems = (messages: CoworkMessage[]): DisplayItem[] => {
+export const buildDisplayItems = (messages: CoworkMessage[]): DisplayItem[] => {
   const items: DisplayItem[] = [];
   const groupsByToolUseId = new Map<string, ToolGroupItem>();
   let pendingAdjacentGroup: ToolGroupItem | null = null;
@@ -459,7 +528,7 @@ const buildDisplayItems = (messages: CoworkMessage[]): DisplayItem[] => {
   return items;
 };
 
-const buildConversationTurns = (items: DisplayItem[]): ConversationTurn[] => {
+export const buildConversationTurns = (items: DisplayItem[]): ConversationTurn[] => {
   const turns: ConversationTurn[] = [];
   let currentTurn: ConversationTurn | null = null;
   let orphanIndex = 0;
@@ -546,7 +615,7 @@ const isVisibleAssistantTurnItem = (item: AssistantTurnItem): boolean => {
 const getVisibleAssistantItems = (assistantItems: AssistantTurnItem[]): AssistantTurnItem[] =>
   assistantItems.filter(isVisibleAssistantTurnItem);
 
-const hasRenderableAssistantContent = (turn: ConversationTurn): boolean => (
+export const hasRenderableAssistantContent = (turn: ConversationTurn): boolean => (
   getVisibleAssistantItems(turn.assistantItems).length > 0
 );
 
@@ -604,23 +673,32 @@ const ToolCallGroup = React.memo<{
   mapDisplayText,
 }) => {
   const { toolUse, toolResult } = group;
-  const toolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
-  const isTodoWriteTool = isTodoWriteToolName(toolName);
+  const isCronTool = isCronToolName(rawToolName);
+  const isTodoWriteTool = isTodoWriteToolName(rawToolName);
   const todoItems = isTodoWriteTool ? parseTodoWriteItems(toolInput) : null;
   const mapText = mapDisplayText ?? ((value: string) => value);
-  const toolInputDisplayRaw = formatToolInput(toolName, toolInput);
+  const toolInputDisplayRaw = formatToolInput(rawToolName, toolInput);
   const toolInputDisplay = toolInputDisplayRaw ? mapText(toolInputDisplayRaw) : null;
-  const toolInputSummaryRaw = getToolInputSummary(toolName, toolInput) ?? toolInputDisplayRaw;
+  const toolInputSummaryRaw = getToolInputSummary(rawToolName, toolInput) ?? toolInputDisplayRaw;
   const toolInputSummary = toolInputSummaryRaw ? mapText(toolInputSummaryRaw) : null;
   const toolResultDisplayRaw = toolResult ? getToolResultDisplay(toolResult) : '';
   const toolResultDisplay = mapText(toolResultDisplayRaw);
+  const hasToolResultText = hasText(toolResultDisplay);
   const isToolError = Boolean(toolResult?.metadata?.isError || toolResult?.metadata?.error);
+  const showNoDetailError = isToolError && !hasToolResultText;
+  const toolResultFallback = showNoDetailError ? i18nService.t('coworkToolNoErrorDetail') : '';
+  const displayToolResult = hasToolResultText ? toolResultDisplay : toolResultFallback;
   const [isExpanded, setIsExpanded] = useState(false);
-  const resultLineCount = getToolResultLineCount(toolResultDisplay);
+  const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
+  const toolResultSummary = isCronTool && hasToolResultText
+    ? truncatePreview(toolResultDisplay.replace(/\s+/g, ' '))
+    : null;
 
   // Check if this is a Bash-like tool that should show terminal style
-  const isBashTool = toolName === 'Bash';
+  const isBashTool = isBashLikeToolName(rawToolName);
 
   return (
     <div className="relative py-1">
@@ -650,9 +728,17 @@ const ToolCallGroup = React.memo<{
               </code>
             )}
           </div>
-          {toolResult && resultLineCount > 0 && !isTodoWriteTool && (
-            <div className="text-xs text-claude-textSecondary/60 mt-0.5">
-              {resultLineCount} {resultLineCount === 1 ? 'line' : 'lines'} of output
+          {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
+            <div className={`text-xs mt-0.5 ${
+              hasToolResultText
+                ? 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+                : showNoDetailError
+                  ? 'text-red-500/80'
+                  : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+            }`}>
+              {hasToolResultText
+                ? (toolResultSummary ?? `${resultLineCount} ${resultLineCount === 1 ? 'line' : 'lines'} of output`)
+                : toolResultFallback}
             </div>
           )}
           {!toolResult && (
@@ -682,11 +768,15 @@ const ToolCallGroup = React.memo<{
                     <span className="whitespace-pre-wrap break-words">{toolInputDisplay}</span>
                   </div>
                 )}
-                {toolResult && toolResultDisplay && (
+                {toolResult && (hasToolResultText || showNoDetailError) && (
                   <div className={`mt-1.5 whitespace-pre-wrap break-words ${
-                    isToolError ? 'text-red-400' : 'text-claude-textSecondary'
+                    isToolError
+                      ? 'text-red-400'
+                      : hasToolResultText
+                        ? 'dark:text-claude-darkTextSecondary text-claude-textSecondary'
+                        : 'dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 italic'
                   }`}>
-                    {toolResultDisplay}
+                    {displayToolResult}
                   </div>
                 )}
                 {!toolResult && (
@@ -713,16 +803,20 @@ const ToolCallGroup = React.memo<{
                   </div>
                 </div>
               )}
-              {toolResult && (
+              {toolResult && (hasToolResultText || showNoDetailError) && (
                 <div>
                   <div className="text-[10px] font-medium text-claude-textSecondary/70 uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                      isToolError ? 'text-red-500' : 'text-claude-text'
+                      isToolError
+                        ? 'text-red-500'
+                        : hasToolResultText
+                          ? 'dark:text-claude-darkText text-claude-text'
+                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
                     }`}>
-                      {toolResultDisplay}
+                      {displayToolResult}
                     </pre>
                   </div>
                 </div>
@@ -799,7 +893,7 @@ const CopyButton: React.FC<{
   );
 };
 
-const UserMessageItem = React.memo<{ message: CoworkMessage; skills: Skill[] }>(({ message, skills }) => {
+export const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = React.memo(({ message, skills }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
 
@@ -1025,13 +1119,13 @@ const ThinkingBlock: React.FC<{
   );
 };
 
-const AssistantTurnBlock = React.memo<{
+export const AssistantTurnBlock: React.FC<{
   turn: ConversationTurn;
   resolveLocalFilePath?: (href: string, text: string) => string | null;
   mapDisplayText?: (value: string) => string;
   showTypingIndicator?: boolean;
   showCopyButtons?: boolean;
-}>(({
+}> = ({
   turn,
   resolveLocalFilePath,
   mapDisplayText,
@@ -1044,7 +1138,8 @@ const AssistantTurnBlock = React.memo<{
     const rawContent = hasText(message.content)
       ? message.content
       : (typeof message.metadata?.error === 'string' ? message.metadata.error : '');
-    const content = mapDisplayText ? mapDisplayText(rawContent) : rawContent;
+    const normalizedContent = getScheduledReminderDisplayText(rawContent) ?? rawContent;
+    const content = mapDisplayText ? mapDisplayText(normalizedContent) : normalizedContent;
     if (!content.trim()) return null;
 
     // Compact summary: show as collapsible block
@@ -1087,7 +1182,11 @@ const AssistantTurnBlock = React.memo<{
     const toolResultDisplayRaw = getToolResultDisplay(message);
     const toolResultDisplay = mapDisplayText ? mapDisplayText(toolResultDisplayRaw) : toolResultDisplayRaw;
     const isToolError = Boolean(message.metadata?.isError || message.metadata?.error);
-    const resultLineCount = getToolResultLineCount(toolResultDisplay);
+    const hasToolResultText = hasText(toolResultDisplay);
+    const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
+    const showNoDetailError = isToolError && !hasToolResultText;
+    const fallbackText = showNoDetailError ? i18nService.t('coworkToolNoErrorDetail') : '';
+    const displayText = hasToolResultText ? toolResultDisplay : fallbackText;
     return (
       <div className="py-1">
         <div className="flex items-start gap-2">
@@ -1103,13 +1202,28 @@ const AssistantTurnBlock = React.memo<{
                 {resultLineCount} {resultLineCount === 1 ? 'line' : 'lines'} of output
               </div>
             )}
-            <div className="mt-2 px-3 py-2 rounded-lg bg-claude-surface/50 max-h-64 overflow-y-auto">
-              <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                isToolError ? 'text-red-500' : 'text-claude-text'
+            {resultLineCount === 0 && showNoDetailError && (
+              <div className={`text-xs mt-0.5 ${
+                isToolError
+                  ? 'text-red-500/80'
+                  : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
               }`}>
-                {toolResultDisplay || i18nService.t('coworkToolRunning')}
-              </pre>
-            </div>
+                {fallbackText}
+              </div>
+            )}
+            {(hasToolResultText || showNoDetailError) && (
+              <div className="mt-2 px-3 py-2 rounded-lg dark:bg-claude-darkSurface/50 bg-claude-surface/50 max-h-64 overflow-y-auto">
+                <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                  isToolError
+                    ? 'text-red-500'
+                    : hasToolResultText
+                      ? 'dark:text-claude-darkText text-claude-text'
+                      : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
+                }`}>
+                  {displayText}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1185,7 +1299,7 @@ const AssistantTurnBlock = React.memo<{
       </div>
     </div>
   );
-});
+};
 
 const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   onManageSkills,
@@ -1200,22 +1314,32 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const currentSession = useSelector((state: RootState) => state.cowork.currentSession);
   const isStreaming = useSelector((state: RootState) => state.cowork.isStreaming);
+  const remoteManaged = useSelector((state: RootState) => state.cowork.remoteManaged);
   const skills = useSelector((state: RootState) => state.skill.skills);
   const detailRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
-  // Turn navigation states
-  // currentTurnIndex (state) drives UI rendering; currentTurnIndexRef (ref) provides
-  // up-to-date value inside callbacks (avoids stale closure). Both must be updated together.
-  const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
-  const currentTurnIndexRef = useRef(0);
-  const [showTurnNav, setShowTurnNav] = useState(false);
-  const hideNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Clear lazy-render height cache when session changes
+  const sessionId = currentSession?.id;
+  useEffect(() => {
+    clearHeightCache();
+  }, [sessionId]);
+
+  // Rail navigation states
+  const [currentRailIndex, setCurrentRailIndex] = useState(-1);
+  const currentRailIndexRef = useRef(-1);
+  const railItemCountRef = useRef(0);
+  // Mapping: turnIndex → { first: firstRailIdx, last: lastRailIdx }
+  const turnToRailRangeRef = useRef<{ first: number; last: number }[]>([]);
   const isNavigatingRef = useRef(false);
   const navigatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnElsCacheRef = useRef<HTMLElement[]>([]);
+  const railLinesRef = useRef<HTMLDivElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
+  const [hoveredRailIndex, setHoveredRailIndex] = useState<number | null>(null);
+  const [isRailHovered, setIsRailHovered] = useState(false);
+  const [railTooltip, setRailTooltip] = useState<{ label: string; top: number; right: number; isUser: boolean } | null>(null);
 
   // Menu and action states
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -1254,21 +1378,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   // Cleanup nav timers on unmount
   useEffect(() => {
     return () => {
-      if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
       if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     };
   }, []);
 
   // Reset nav state when session changes
   useEffect(() => {
-    setShowTurnNav(false);
     setIsScrollable(false);
-    setCurrentTurnIndex(0);
-    currentTurnIndexRef.current = 0;
+    setCurrentRailIndex(-1);
+    currentRailIndexRef.current = -1;
     isNavigatingRef.current = false;
     turnElsCacheRef.current = [];
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
+    setHoveredRailIndex(null);
   }, [currentSession?.id]);
 
   // Close menu on outside click
@@ -1587,58 +1709,89 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     // Skip turn nav updates during programmatic navigation / auto-scrolling
     if (isNavigatingRef.current) return;
 
-    // Show turn nav and reset hide timer
-    setShowTurnNav(true);
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
-    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
-
-    // Update current turn index based on cached turn elements
+    // Use turn-level elements (always in DOM, even for lazy-rendered turns) for scroll detection
     const turnEls = turnElsCacheRef.current;
-    if (turnEls.length === 0) return;
+    const railCount = railItemCountRef.current;
+    if (turnEls.length === 0 || railCount === 0) return;
 
-    // If at very bottom, snap to last turn (use smaller threshold than auto-scroll)
+    // If at very bottom, snap to last rail item
     if (distanceToBottom <= NAV_BOTTOM_SNAP_THRESHOLD) {
-      const lastIndex = turnEls.length - 1;
-      currentTurnIndexRef.current = lastIndex;
-      setCurrentTurnIndex(lastIndex);
+      const lastRail = railCount - 1;
+      if (currentRailIndexRef.current !== lastRail) {
+        currentRailIndexRef.current = lastRail;
+        setCurrentRailIndex(lastRail);
+      }
       return;
     }
 
+    // Find current turn based on turn element offsetTop
     const scrollTop = container.scrollTop;
-    let visibleIndex = 0;
+    let currentTurn = 0;
     for (let i = 0; i < turnEls.length; i++) {
       if (turnEls[i].offsetTop <= scrollTop + 80) {
-        visibleIndex = i;
+        currentTurn = i;
       } else {
         break;
       }
     }
-    currentTurnIndexRef.current = visibleIndex;
-    setCurrentTurnIndex(visibleIndex);
+
+    // Map turn to rail index: check if scrolled past the midpoint of the turn
+    // (first half → user message = first rail item, second half → assistant = last rail item)
+    const range = turnToRailRangeRef.current[currentTurn];
+    if (!range) return;
+    let railIdx = range.first;
+    if (range.first !== range.last) {
+      const turnEl = turnEls[currentTurn];
+      const nextTurnTop = currentTurn + 1 < turnEls.length
+        ? turnEls[currentTurn + 1].offsetTop
+        : container.scrollHeight;
+      const turnMid = turnEl.offsetTop + (nextTurnTop - turnEl.offsetTop) / 2;
+      if (scrollTop + 80 >= turnMid) {
+        railIdx = range.last;
+      }
+    }
+
+    if (currentRailIndexRef.current !== railIdx) {
+      currentRailIndexRef.current = railIdx;
+      setCurrentRailIndex(railIdx);
+    }
   }, []);
 
-  const navigateToTurn = useCallback((direction: 'prev' | 'next') => {
-    const turnEls = turnElsCacheRef.current;
-    if (turnEls.length === 0) return;
-    const idx = currentTurnIndexRef.current;
-    const targetIndex = direction === 'prev' ? idx - 1 : idx + 1;
-    if (targetIndex < 0 || targetIndex >= turnEls.length) return;
+  const navigateToRailItem = useCallback((railIndex: number) => {
+    if (railIndex < 0 || railIndex >= railItemCountRef.current) return;
 
-    // Block scroll handler from overriding index during smooth scroll
+    // Find the turn that contains this rail item
+    const ranges = turnToRailRangeRef.current;
+    let targetTurnIdx = -1;
+    for (let t = 0; t < ranges.length; t++) {
+      if (ranges[t] && railIndex >= ranges[t].first && railIndex <= ranges[t].last) {
+        targetTurnIdx = t;
+        break;
+      }
+    }
+
     isNavigatingRef.current = true;
     if (navigatingTimerRef.current) clearTimeout(navigatingTimerRef.current);
     navigatingTimerRef.current = setTimeout(() => { isNavigatingRef.current = false; }, NAV_SCROLL_LOCK_DURATION);
 
-    turnEls[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
-    currentTurnIndexRef.current = targetIndex;
-    setCurrentTurnIndex(targetIndex);
-    // Reset hide timer
-    setShowTurnNav(true);
-    if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
-    hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
-  }, []);
+    // Try to scroll to the exact data-rail-index element if it's in the DOM
+    const container = scrollContainerRef.current;
+    if (container) {
+      const el = container.querySelector<HTMLElement>(`[data-rail-index="${railIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (targetTurnIdx >= 0) {
+        // Fallback: scroll to the turn element (always in DOM)
+        const turnEls = turnElsCacheRef.current;
+        if (targetTurnIdx < turnEls.length) {
+          turnEls[targetTurnIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
 
-  // Get the last message content for auto-scroll on streaming updates
+    currentRailIndexRef.current = railIndex;
+    setCurrentRailIndex(railIndex);
+  }, []);
   const lastMessage = currentSession?.messages?.[currentSession.messages.length - 1];
   const lastMessageContent = lastMessage?.content;
 
@@ -1647,71 +1800,88 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     const textValue = typeof text === 'string' ? text.trim() : '';
     if (!hrefValue && !textValue) return null;
 
-    // In sandbox mode, translate VM guest paths to host paths.
-    const mapSandboxPath = (filePath: string): string => {
-      if (
-        currentSession?.executionMode !== 'sandbox' ||
-        !currentSession?.cwd
-      ) {
-        return filePath;
-      }
-      const mapped = mapSandboxGuestPathToCwd(filePath, currentSession.cwd);
-      return mapped ?? filePath;
-    };
-
     const hrefRootRelative = hrefValue ? parseRootRelativePath(hrefValue) : null;
     if (hrefRootRelative) {
-      return mapSandboxPath(hrefRootRelative);
+      return hrefRootRelative;
     }
 
     const hrefPath = hrefValue ? normalizeLocalPath(hrefValue) : null;
     if (hrefPath) {
       if (hrefPath.isRelative && currentSession?.cwd) {
-        return mapSandboxPath(toAbsolutePathFromCwd(hrefPath.path, currentSession.cwd));
+        return toAbsolutePathFromCwd(hrefPath.path, currentSession.cwd);
       }
       if (hrefPath.isAbsolute) {
-        return mapSandboxPath(hrefPath.path);
+        return hrefPath.path;
       }
     }
 
     const textRootRelative = textValue ? parseRootRelativePath(textValue) : null;
     if (textRootRelative) {
-      return mapSandboxPath(textRootRelative);
+      return textRootRelative;
     }
 
     const textPath = textValue ? normalizeLocalPath(textValue) : null;
     if (textPath) {
       if (textPath.isRelative && currentSession?.cwd) {
-        return mapSandboxPath(toAbsolutePathFromCwd(textPath.path, currentSession.cwd));
+        return toAbsolutePathFromCwd(textPath.path, currentSession.cwd);
       }
       if (textPath.isAbsolute) {
-        return mapSandboxPath(textPath.path);
+        return textPath.path;
       }
     }
 
     return null;
-  }, [currentSession?.cwd, currentSession?.executionMode]);
+  }, [currentSession?.cwd]);
 
   const mapDisplayText = useCallback((value: string): string => {
-    if (currentSession?.executionMode !== 'sandbox') {
-      return value;
-    }
-    return mapSandboxGuestPathsInText(value, currentSession?.cwd);
-  }, [currentSession?.cwd, currentSession?.executionMode]);
+    return value;
+  }, []);
 
   const messages = currentSession?.messages;
   const displayItems = useMemo(() => messages ? buildDisplayItems(messages) : [], [messages]);
   const turns = useMemo(() => buildConversationTurns(displayItems), [displayItems]);
 
-  // Cache turn DOM elements when turns change
+  // Cache turn-level DOM elements (data-turn-index, always in DOM even for lazy turns)
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) { turnElsCacheRef.current = []; return; }
-    // DOM is already committed when useEffect runs, query synchronously
     turnElsCacheRef.current = Array.from(
       container.querySelectorAll<HTMLElement>('[data-turn-index]')
     );
   }, [turns]);
+
+  // Sync rail index when turns change or rail first appears (isScrollable becomes true)
+  useEffect(() => {
+    // After turns/scrollable change, if rail index is uninitialized (-1) or out of bounds,
+    // wait for next frame so render IIFE has updated railItemCountRef, then sync
+    const frameId = requestAnimationFrame(() => {
+      const count = railItemCountRef.current;
+      if (count === 0) return;
+      const idx = currentRailIndexRef.current;
+      if (idx < 0 || idx >= count) {
+        const resolved = count - 1;
+        currentRailIndexRef.current = resolved;
+        setCurrentRailIndex(resolved);
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [turns, isScrollable]);
+
+  // Scroll rail lines container to keep active item visible (without affecting page scroll)
+  useEffect(() => {
+    const container = railLinesRef.current;
+    if (!container || currentRailIndex < 0) return;
+    const activeEl = container.children[currentRailIndex] as HTMLElement | undefined;
+    if (!activeEl) return;
+    // Manual scroll calculation to avoid scrollIntoView bubbling to parent scrollable
+    const elTop = activeEl.offsetTop;
+    const elBottom = elTop + activeEl.offsetHeight;
+    if (elTop < container.scrollTop) {
+      container.scrollTop = elTop;
+    } else if (elBottom > container.scrollTop + container.clientHeight) {
+      container.scrollTop = elBottom - container.clientHeight;
+    }
+  }, [currentRailIndex]);
 
   // Auto scroll to bottom when new messages arrive or content updates (streaming)
   useEffect(() => {
@@ -1727,19 +1897,23 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       // Release the guard after the browser processes the scroll event
       requestAnimationFrame(() => { isNavigatingRef.current = false; });
     }
-    // Sync turn index to last when auto-scrolled to bottom
+    // Sync rail index to last when auto-scrolled to bottom
     if (turns.length > 0) {
-      const lastIndex = turns.length - 1;
-      currentTurnIndexRef.current = lastIndex;
-      setCurrentTurnIndex((prev) => (prev === lastIndex ? prev : lastIndex));
+      // Use -1 when rail hasn't rendered yet (count is 0),
+      // so the render IIFE resolvedRailIndex fallback picks the last item
+      const lastRail = railItemCountRef.current > 0 ? railItemCountRef.current - 1 : -1;
+      currentRailIndexRef.current = lastRail;
+      setCurrentRailIndex(lastRail);
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
+
 
   if (!currentSession) {
     return null;
   }
 
   const renderConversationTurns = () => {
+    let railCounter = 0;
     if (turns.length === 0) {
       if (!isStreaming) return null;
       return (
@@ -1762,16 +1936,28 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const isLastTurn = index === turns.length - 1;
       const showTypingIndicator = isStreaming && isLastTurn && !hasRenderableAssistantContent(turn);
       const showAssistantBlock = turn.assistantItems.length > 0 || showTypingIndicator;
+      // Always render last 3 turns (needed for streaming, auto-scroll, and smooth UX)
+      const alwaysRender = index >= turns.length - 3;
+
+      // Compute rail indices for user/assistant messages (must match rail IIFE logic)
+      let asstContent = '';
+      for (const item of turn.assistantItems) {
+        if (item.type === 'assistant' && item.message?.content) {
+          asstContent += item.message.content;
+        }
+      }
+      const userRailIdx = turn.userMessage ? railCounter++ : -1;
+      const asstRailIdx = asstContent ? railCounter++ : -1;
 
       return (
-        <div key={turn.id} data-turn-index={index}>
+        <LazyRenderTurn key={turn.id} turnId={turn.id} alwaysRender={alwaysRender} data-turn-index={index}>
           {turn.userMessage && (
-            <div data-export-role="user-message">
+            <div data-export-role="user-message" {...(userRailIdx >= 0 ? { 'data-rail-index': userRailIdx } : undefined)}>
               <UserMessageItem message={turn.userMessage} skills={skills} />
             </div>
           )}
           {showAssistantBlock && (
-            <div data-export-role="assistant-block">
+            <div data-export-role="assistant-block" {...(asstRailIdx >= 0 ? { 'data-rail-index': asstRailIdx } : undefined)}>
               <AssistantTurnBlock
                 turn={turn}
                 resolveLocalFilePath={resolveLocalFilePath}
@@ -1781,7 +1967,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               />
             </div>
           )}
-        </div>
+        </LazyRenderTurn>
       );
     });
   };
@@ -1789,7 +1975,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   return (
     <div ref={detailRootRef} className="flex-1 flex flex-col bg-claude-bg h-full">
       {/* Header */}
-      <div className="draggable flex h-12 items-center justify-between px-4 border-b border-claude-border bg-claude-surface/50 shrink-0">
+      <div className="draggable flex h-12 items-center justify-between px-4 border-b dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface/50 bg-claude-surface/50 shrink-0">
         {/* Left side: Toggle buttons (when collapsed) + Title + Sandbox badge */}
         <div className="flex h-full items-center gap-2 min-w-0">
           {isSidebarCollapsed && (
@@ -1832,16 +2018,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <h1 className="text-sm leading-none font-medium text-claude-text truncate max-w-[360px]">
               {currentSession.title || i18nService.t('coworkNewSession')}
             </h1>
-          )}
-          {currentSession.executionMode === 'sandbox' && (
-            <span className="inline-flex items-center rounded-full bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-              {i18nService.t('coworkSandboxBadge')}
-            </span>
-          )}
-          {currentSession.executionMode === 'local' && (
-            <span className="inline-flex items-center rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-              {i18nService.t('coworkLocalBadge')}
-            </span>
           )}
         </div>
 
@@ -1972,46 +2148,218 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         <div
           ref={scrollContainerRef}
           onScroll={handleMessagesScroll}
-          className="h-full min-h-0 overflow-y-auto pt-3"
+          className={`h-full min-h-0 overflow-y-auto pt-3 ${turns.length > 1 && isScrollable ? 'pr-8' : 'pr-3'}`}
         >
           {renderConversationTurns()}
           <div className="h-20" />
         </div>
 
-        {/* Turn Navigation Buttons */}
+        {/* Turn Navigation Rail — to the left of scrollbar */}
         {turns.length > 1 && isScrollable && (
           <div
-            className={`absolute right-4 top-1/2 -translate-y-1/2 flex flex-col rounded-lg overflow-hidden shadow-lg transition-opacity duration-300 z-10
-              dark:bg-claude-darkSurface/90 bg-claude-surface/90 backdrop-blur-sm
-              border dark:border-claude-darkBorder border-claude-border
-              ${showTurnNav ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+            className="absolute right-[18px] top-1/2 -translate-y-1/2 w-5 flex flex-col items-end z-10"
+            style={{ maxHeight: 'calc(100% - 40px)' }}
+            onMouseEnter={() => setIsRailHovered(true)}
+            onMouseLeave={() => {
+              setIsRailHovered(false);
+              setHoveredRailIndex(null);
+              setRailTooltip(null);
+            }}
           >
+            {/* Up Arrow */}
             <button
               type="button"
-              onClick={() => currentTurnIndex > 0 && navigateToTurn('prev')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex <= 0
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              onClick={() => {
+                const resolvedRail = currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex;
+                if (resolvedRail <= 0) return;
+                navigateToRailItem(resolvedRail - 1);
+              }}
+              onMouseEnter={() => { setHoveredRailIndex(null); }}
+              className={`shrink-0 flex items-center justify-center w-5 h-5 mb-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
+                ${!isRailHovered
+                  ? 'opacity-0 pointer-events-none'
+                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) <= 0
+                    ? 'opacity-30 cursor-default'
+                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
               </svg>
             </button>
-            <div className="dark:border-claude-darkBorder border-claude-border border-t" />
+
+            {/* Message Lines */}
+            <div
+              ref={railLinesRef}
+              className="overflow-y-auto min-h-0 flex-1"
+              style={{ scrollbarWidth: 'none' }}
+            >
+            {(() => {
+              // Build flat list of messages with their content length and turn index
+              const MIN_W = 6;  // px
+              const MAX_W = 16; // px
+              // Strip common markdown syntax for tooltip display
+              const stripMd = (s: string) => s
+                .replace(/^#+\s+/gm, '')
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/`[^`]*`/g, ' ')
+                .replace(/[*_~>]/g, '')
+                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+                .replace(/\s+/g, ' ')
+                .trim();
+              // Get first meaningful text snippet from content
+              const getLabel = (content: string, fallback: string) => {
+                const stripped = stripMd(content);
+                return stripped.slice(0, 50) || fallback;
+              };
+              type RailItem = { key: string; turnIndex: number; label: string; contentLen: number; isUser: boolean };
+              const items: RailItem[] = [];
+              for (let i = 0; i < turns.length; i++) {
+                const turn = turns[i];
+                if (turn.userMessage) {
+                  const content = turn.userMessage.content ?? '';
+                  items.push({
+                    key: `${turn.id}-user`,
+                    turnIndex: i,
+                    label: getLabel(content, `Turn ${i + 1}`),
+                    contentLen: content.length,
+                    isUser: true,
+                  });
+                }
+                // Aggregate all assistant content into one line per turn
+                let asstContent = '';
+                for (const item of turn.assistantItems) {
+                  if (item.type === 'assistant' && item.message?.content) {
+                    asstContent += item.message.content;
+                  }
+                }
+                if (asstContent) {
+                  items.push({
+                    key: `${turn.id}-asst`,
+                    turnIndex: i,
+                    label: getLabel(asstContent, 'LobsterAI'),
+                    contentLen: asstContent.length,
+                    isUser: false,
+                  });
+                }
+              }
+              const maxLen = items.reduce((acc, m) => Math.max(acc, m.contentLen), 1);
+              // Sync rail item count and turn-to-rail mapping
+              railItemCountRef.current = items.length;
+              const rangeMap: { first: number; last: number }[] = [];
+              for (let ri = 0; ri < items.length; ri++) {
+                const ti = items[ri].turnIndex;
+                if (!rangeMap[ti]) {
+                  rangeMap[ti] = { first: ri, last: ri };
+                } else {
+                  rangeMap[ti].last = ri;
+                }
+              }
+              turnToRailRangeRef.current = rangeMap;
+
+              // Clamp rail index to valid range
+              const resolvedRailIndex = currentRailIndex < 0 || currentRailIndex >= items.length
+                ? items.length - 1
+                : currentRailIndex;
+
+              return items.map((msg, idx) => {
+                const isActive = idx === resolvedRailIndex;
+                const isHovered = idx === hoveredRailIndex;
+                const ratio = msg.contentLen / maxLen;
+                const lineW = Math.round(MIN_W + ratio * (MAX_W - MIN_W));
+                return (
+                  <button
+                    key={msg.key}
+                    type="button"
+                    onClick={() => {
+                      navigateToRailItem(idx);
+                    }}
+                    onMouseEnter={(e) => {
+                      setHoveredRailIndex(idx);
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const top = Math.max(8, Math.min(rect.top + rect.height / 2, window.innerHeight - 8));
+                      setRailTooltip({
+                        label: msg.label,
+                        top,
+                        right: window.innerWidth - rect.left + 8,
+                        isUser: msg.isUser,
+                      });
+                    }}
+                    onMouseLeave={() => setRailTooltip(null)}
+                    className="flex items-center justify-end cursor-pointer w-5 py-[5px]"
+                  >
+                    <div
+                      className={`h-[2px] rounded-full transition-all ${
+                        isActive || isHovered
+                          ? 'bg-neutral-800 dark:bg-neutral-200'
+                          : 'bg-neutral-300 dark:bg-neutral-600'
+                      }`}
+                      style={{ width: isActive || isHovered ? MAX_W : lineW }}
+                    />
+                  </button>
+                );
+              });
+            })()}
+            </div>
+
+            {/* Down Arrow */}
             <button
               type="button"
-              onClick={() => currentTurnIndex < turns.length - 1 && navigateToTurn('next')}
-              className={`px-1.5 py-3 transition-colors dark:text-claude-darkText text-claude-text
-                ${currentTurnIndex >= turns.length - 1
-                  ? 'opacity-30 cursor-default'
-                  : 'dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover cursor-pointer'}`}
+              onClick={() => {
+                const maxRail = railItemCountRef.current - 1;
+                const resolvedRail = currentRailIndex < 0 ? maxRail : currentRailIndex;
+                if (resolvedRail >= maxRail) return;
+                navigateToRailItem(resolvedRail + 1);
+              }}
+              onMouseEnter={() => { setHoveredRailIndex(null); }}
+              className={`shrink-0 flex items-center justify-center w-5 h-5 mt-2 -mr-[5px] rounded-full transition-all text-neutral-600 dark:text-neutral-400
+                ${!isRailHovered
+                  ? 'opacity-0 pointer-events-none'
+                  : (currentRailIndex < 0 ? railItemCountRef.current - 1 : currentRailIndex) >= railItemCountRef.current - 1
+                    ? 'opacity-30 cursor-default'
+                    : 'cursor-pointer hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60'}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
               </svg>
             </button>
           </div>
+        )}
+
+        {/* Rail Tooltip — rendered via portal to escape transform context */}
+        {railTooltip && createPortal(
+          <div
+            className={`fixed z-[100] px-3.5 py-2 text-[13px] leading-snug pointer-events-none overflow-hidden
+              max-w-[240px] shadow-[0_2px_12px_rgba(0,0,0,0.12)]
+              border dark:shadow-[0_2px_12px_rgba(0,0,0,0.4)]
+              ${railTooltip.isUser
+                ? 'rounded-[12px_12px_4px_12px] bg-white border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
+                : 'rounded-xl bg-neutral-50 border-neutral-200/80 dark:bg-neutral-800 dark:border-neutral-700'
+              }`}
+            style={{
+              top: railTooltip.top,
+              right: railTooltip.right,
+              transform: 'translateY(-50%)',
+            }}
+          >
+            {!railTooltip.isUser && (
+              <div className="text-[12px] font-medium mb-0.5 text-neutral-800 dark:text-neutral-200">
+                LobsterAI:
+              </div>
+            )}
+            <div
+              className="text-neutral-600 dark:text-neutral-300"
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                wordBreak: 'break-all',
+              }}
+            >
+              {railTooltip.label}
+            </div>
+          </div>,
+          document.body
         )}
       </div>
 
@@ -2025,11 +2373,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             onSubmit={onContinue}
             onStop={onStop}
             isStreaming={isStreaming}
-            placeholder={i18nService.t('coworkContinuePlaceholder')}
-            disabled={false}
-            onManageSkills={onManageSkills}
+            placeholder={i18nService.t(remoteManaged ? 'coworkRemoteManagedPlaceholder' : 'coworkContinuePlaceholder')}
+            disabled={remoteManaged}
             size="large"
-            showModelSelector={true}
+            remoteManaged={remoteManaged}
+            onManageSkills={remoteManaged ? undefined : onManageSkills}
+            showModelSelector={!remoteManaged}
+            sessionId={currentSession?.id}
           />
         </div>
       </div>

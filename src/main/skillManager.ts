@@ -1,5 +1,6 @@
 import { app, BrowserWindow, session } from 'electron';
 import { execSync, spawn, spawnSync } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
@@ -8,6 +9,9 @@ import { SqliteStore } from './sqliteStore';
 import { cpRecursiveSync } from './fsCompat';
 import { getElectronNodeRuntimePath } from './libs/coworkUtil';
 import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
+import { scanSkillSecurity, scanMultipleSkillDirs, mergeReports } from './libs/skillSecurity/skillSecurityScanner';
+import type { SkillSecurityReport, SecurityReportAction } from './libs/skillSecurity/skillSecurityTypes';
+import { t } from './i18n';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
@@ -794,6 +798,135 @@ const downloadGithubArchive = async (
   return extractRoot;
 };
 
+/**
+ * Check if a source string looks like an npm package spec.
+ * Supports: package-name, @scope/package, package@version, @scope/package@version
+ */
+const isNpmPackageSpec = (source: string): boolean => {
+  // Must not be a local path, URL, or GitHub shorthand (owner/repo)
+  if (source.startsWith('.') || source.startsWith('/') || source.startsWith('~')) return false;
+  try { new URL(source); return false; } catch { /* not a URL, good */ }
+
+  // Scoped package: @scope/name or @scope/name@version
+  if (/^@[\w-]+\/[\w.-]+(@[\w.^~>=<*-]+)?$/.test(source)) return true;
+  // Unscoped package: name or name@version (must not contain '/' which would be owner/repo)
+  if (/^[\w.-]+(@[\w.^~>=<*-]+)?$/.test(source) && !source.includes('/')) return true;
+
+  return false;
+};
+
+/**
+ * Resolve the bundled npm-cli.js path for running npm commands.
+ */
+const resolveNpmCliJs = (): string | null => {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin', 'npm-cli.js')]
+    : [
+        path.join(app.getAppPath(), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        path.join(process.cwd(), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      ];
+  return candidates.find(c => fs.existsSync(c)) || null;
+};
+
+/**
+ * Download and extract an npm package using `npm pack`.
+ * Similar to openclaw's plugin install: npm pack → extract .tgz → return path.
+ */
+const downloadNpmPackage = async (spec: string, tempRoot: string): Promise<string> => {
+  const npmCliJs = resolveNpmCliJs();
+  const electronPath = getElectronNodeRuntimePath();
+
+  // Determine how to invoke npm
+  let npmCommand: string;
+  let npmArgs: string[];
+  if (npmCliJs) {
+    npmCommand = electronPath;
+    npmArgs = [npmCliJs, 'pack', spec, '--ignore-scripts', '--json'];
+  } else {
+    npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    npmArgs = ['pack', spec, '--ignore-scripts', '--json'];
+  }
+
+  const packResult = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn(npmCommand, npmArgs, {
+      cwd: tempRoot,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => { stdout += data; });
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.on('error', (err) => resolve({ code: 1, stdout: '', stderr: err.message }));
+  });
+
+  if (packResult.code !== 0) {
+    const detail = packResult.stderr.trim() || packResult.stdout.trim();
+    throw new Error(`npm pack failed for "${spec}": ${detail}`);
+  }
+
+  // Find the .tgz file
+  const tgzFiles = fs.readdirSync(tempRoot).filter(f => f.endsWith('.tgz'));
+  if (tgzFiles.length === 0) {
+    // Try parsing JSON output for filename
+    try {
+      const parsed = JSON.parse(packResult.stdout);
+      const entries = Array.isArray(parsed) ? parsed : [parsed];
+      for (const entry of entries) {
+        if (entry.filename && fs.existsSync(path.join(tempRoot, entry.filename))) {
+          tgzFiles.push(entry.filename);
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (tgzFiles.length === 0) {
+    throw new Error(`npm pack produced no .tgz archive for "${spec}"`);
+  }
+
+  // Extract .tgz (which is a gzip'd tar containing a 'package/' directory)
+  const tgzPath = path.join(tempRoot, tgzFiles[0]);
+  const extractDir = path.join(tempRoot, 'npm-extracted');
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  // Use tar to extract (Node.js built-in zlib + tar via npm's own bundled tar)
+  const tarExtract = await new Promise<{ code: number; stderr: string }>((resolve) => {
+    const tarCommand = npmCliJs ? electronPath : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+    const tarArgs = npmCliJs
+      ? [npmCliJs, 'exec', '--', 'tar', 'xzf', tgzPath, '-C', extractDir]
+      : ['exec', '--', 'tar', 'xzf', tgzPath, '-C', extractDir];
+
+    // Try system tar first (available on all platforms including Windows 10+)
+    const child = spawn('tar', ['xzf', tgzPath, '-C', extractDir], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('close', (code) => resolve({ code: code ?? 1, stderr }));
+    child.on('error', () => resolve({ code: 1, stderr: 'tar not found' }));
+  });
+
+  if (tarExtract.code !== 0) {
+    throw new Error(`Failed to extract npm package: ${tarExtract.stderr}`);
+  }
+
+  // npm pack extracts to a 'package/' subdirectory
+  const packageDir = path.join(extractDir, 'package');
+  if (fs.existsSync(packageDir)) {
+    return packageDir;
+  }
+
+  // Fallback: return first directory in extract dir
+  const dirs = fs.readdirSync(extractDir)
+    .map(name => path.join(extractDir, name))
+    .filter(p => fs.statSync(p).isDirectory());
+  return dirs[0] || extractDir;
+};
+
 const isRemoteZipUrl = (source: string): boolean => {
   try {
     const url = new URL(source);
@@ -947,6 +1080,17 @@ const isWebSearchSkillBroken = (skillRoot: string): boolean => {
 export class SkillManager {
   private watchers: fs.FSWatcher[] = [];
   private notifyTimer: NodeJS.Timeout | null = null;
+  private changeListeners: Array<() => void> = [];
+  private pendingInstalls = new Map<string, {
+    tempDir: string;
+    cleanupPath: string | null;
+    root: string;
+    skillDirs: string[];
+    timer: NodeJS.Timeout;
+    isUpgrade?: boolean;
+    existingSkillDir?: string;
+  }>();
+  private upgradingSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
 
@@ -960,6 +1104,43 @@ export class SkillManager {
       fs.mkdirSync(root, { recursive: true });
     }
     return root;
+  }
+
+  recoverInterruptedUpgrades(): void {
+    const root = this.getSkillsRoot();
+    if (!fs.existsSync(root)) return;
+
+    try {
+      const entries = fs.readdirSync(root);
+      for (const entry of entries) {
+        if (!entry.endsWith('.upgrading')) continue;
+        const backupDir = path.join(root, entry);
+        const stat = fs.statSync(backupDir);
+        if (!stat.isDirectory()) continue;
+
+        const originalName = entry.replace(/\.upgrading$/, '');
+        const originalDir = path.join(root, originalName);
+
+        try {
+          if (fs.existsSync(originalDir) && fs.existsSync(path.join(originalDir, SKILL_FILE_NAME))) {
+            // Upgrade completed successfully, clean up backup
+            console.log(`[SkillManager] cleaning up completed upgrade backup: ${entry}`);
+            fs.rmSync(backupDir, { recursive: true, force: true });
+          } else {
+            // Upgrade was interrupted, roll back
+            console.log(`[SkillManager] rolling back interrupted upgrade: ${entry} → ${originalName}`);
+            if (fs.existsSync(originalDir)) {
+              fs.rmSync(originalDir, { recursive: true, force: true });
+            }
+            fs.renameSync(backupDir, originalDir);
+          }
+        } catch (error) {
+          console.warn(`[SkillManager] failed to recover upgrade for ${entry}:`, error);
+        }
+      }
+    } catch (error) {
+      console.warn('[SkillManager] failed to recover interrupted upgrades:', error);
+    }
   }
 
   syncBundledSkillsToUserData(): void {
@@ -1203,7 +1384,13 @@ export class SkillManager {
     return this.listSkills();
   }
 
-  async downloadSkill(source: string): Promise<{ success: boolean; skills?: SkillRecord[]; error?: string }> {
+  async downloadSkill(source: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {
     let cleanupPath: string | null = null;
     try {
       const trimmed = source.trim();
@@ -1211,64 +1398,82 @@ export class SkillManager {
         return { success: false, error: 'Missing skill source' };
       }
 
+      console.log(`[SkillManager] downloadSkill: source="${trimmed}"`);
       const root = this.ensureSkillsRoot();
       let localSource = trimmed;
       if (fs.existsSync(localSource)) {
         const stat = fs.statSync(localSource);
         if (stat.isFile()) {
           if (isZipFile(localSource)) {
+            console.log('[SkillManager] downloadSkill: detected local zip file');
             const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
             await extractZip(localSource, { dir: tempRoot });
             localSource = tempRoot;
             cleanupPath = tempRoot;
           } else if (path.basename(localSource) === SKILL_FILE_NAME) {
+            console.log('[SkillManager] downloadSkill: detected local SKILL.md file');
             localSource = path.dirname(localSource);
           } else {
             return { success: false, error: 'Skill source must be a directory, zip file, or SKILL.md file' };
           }
+        } else {
+          console.log('[SkillManager] downloadSkill: detected local directory');
         }
       } else if (isRemoteZipUrl(trimmed)) {
+        console.log('[SkillManager] downloadSkill: detected remote zip URL');
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-zip-'));
         cleanupPath = tempRoot;
         localSource = await downloadZipUrl(trimmed, tempRoot);
+      } else if (isNpmPackageSpec(trimmed)) {
+        console.log(`[SkillManager] downloadSkill: detected npm package spec "${trimmed}"`);
+        const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-npm-'));
+        cleanupPath = tempRoot;
+        localSource = await downloadNpmPackage(trimmed, tempRoot);
+        console.log(`[SkillManager] downloadSkill: npm package extracted to ${localSource}`);
       } else {
         const normalized = this.normalizeGitSource(trimmed);
         if (!normalized) {
-          return { success: false, error: 'Invalid skill source. Use owner/repo, repo URL, or a GitHub tree/blob URL.' };
+          return { success: false, error: 'Invalid skill source. Use owner/repo, repo URL, npm package spec, or a GitHub tree/blob URL.' };
         }
         const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-'));
         cleanupPath = tempRoot;
         const repoName = normalizeFolderName(normalized.repoNameHint || deriveRepoName(normalized.repoUrl));
         const clonePath = path.join(tempRoot, repoName);
-        const cloneArgs = ['clone', '--depth', '1'];
-        if (normalized.ref) {
-          cloneArgs.push('--branch', normalized.ref);
-        }
-        cloneArgs.push(normalized.repoUrl, clonePath);
-        const gitRuntime = resolveGitCommand();
         const githubSource = parseGithubRepoSource(normalized.repoUrl);
         let downloadedSourceRoot = clonePath;
-        try {
-          await runCommand(gitRuntime.command, cloneArgs, { env: gitRuntime.env });
-        } catch (error) {
-          const errno = (error as NodeJS.ErrnoException | null)?.code;
-          if (githubSource) {
-            try {
-              downloadedSourceRoot = await downloadGithubArchive(githubSource, tempRoot, normalized.ref);
-            } catch (archiveError) {
-              const gitMessage = extractErrorMessage(error);
-              const archiveMessage = extractErrorMessage(archiveError);
-              if (errno === 'ENOENT' && process.platform === 'win32') {
-                throw new Error(
-                  'Git executable not found. Please install Git for Windows or reinstall SD Agent with bundled PortableGit.'
-                  + ` Archive fallback also failed: ${archiveMessage}`
-                );
-              }
-              throw new Error(`Git clone failed: ${gitMessage}. Archive fallback failed: ${archiveMessage}`);
+
+        // Prefer HTTP zip download for GitHub repos (no git dependency required).
+        // Fall back to git clone only for non-GitHub sources or if download fails.
+        let downloaded = false;
+        if (githubSource) {
+          console.log(`[SkillManager] downloadSkill: trying GitHub HTTP zip download for ${githubSource.owner}/${githubSource.repo}`);
+          try {
+            downloadedSourceRoot = await downloadGithubArchive(githubSource, tempRoot, normalized.ref);
+            downloaded = true;
+            console.log(`[SkillManager] downloadSkill: GitHub HTTP download succeeded → ${downloadedSourceRoot}`);
+          } catch (err) {
+            console.log(`[SkillManager] downloadSkill: GitHub HTTP download failed: ${err instanceof Error ? err.message : err}, falling back to git clone`);
+          }
+        }
+
+        if (!downloaded) {
+          console.log(`[SkillManager] downloadSkill: using git clone for ${normalized.repoUrl}`);
+          const cloneArgs = ['clone', '--depth', '1'];
+          if (normalized.ref) {
+            cloneArgs.push('--branch', normalized.ref);
+          }
+          cloneArgs.push(normalized.repoUrl, clonePath);
+          const gitRuntime = resolveGitCommand();
+          try {
+            await runCommand(gitRuntime.command, cloneArgs, { env: gitRuntime.env });
+          } catch (error) {
+            const errno = (error as NodeJS.ErrnoException | null)?.code;
+            if (errno === 'ENOENT' && process.platform === 'win32') {
+              throw new Error(
+                'Failed to download skill. Git is not installed.'
+                + ' Please install Git for Windows, or use a GitHub URL (HTTP download).'
+              );
             }
-          } else if (errno === 'ENOENT' && process.platform === 'win32') {
-            throw new Error('Git executable not found. Please install Git for Windows or reinstall SD Agent with bundled PortableGit.');
-          } else {
             throw error;
           }
         }
@@ -1298,9 +1503,55 @@ export class SkillManager {
       if (skillDirs.length === 0) {
         cleanupPathSafely(cleanupPath);
         cleanupPath = null;
-        return { success: false, error: 'No SKILL.md found in source' };
+        return { success: false, error: t('skillErrNoSkillMd') };
       }
 
+      // Security scan before installation
+      let auditReport: SkillSecurityReport | null = null;
+      try {
+        console.log(`[SkillManager] Starting security scan for ${skillDirs.length} skill dir(s)...`);
+        const reports = await scanMultipleSkillDirs(skillDirs);
+        auditReport = mergeReports(reports);
+        if (auditReport) {
+          console.log(`[SkillManager] Security scan complete: riskLevel=${auditReport.riskLevel}, score=${auditReport.riskScore}, findings=${auditReport.findings.length}, duration=${auditReport.scanDurationMs}ms`);
+          for (const f of auditReport.findings) {
+            console.log(`[SkillManager]   [${f.severity}] ${f.dimension} | ${f.ruleId} → ${f.file}${f.line ? ':' + f.line : ''}`);
+          }
+        }
+      } catch (err) {
+        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+      }
+
+      // If risk detected, cache for user confirmation instead of auto-installing
+      if (auditReport && auditReport.riskLevel !== 'safe') {
+        const pendingId = crypto.randomUUID();
+        console.log(`[SkillManager] Risk detected (${auditReport.riskLevel}), pending user confirmation: ${pendingId}`);
+        const timer = setTimeout(() => {
+          const pending = this.pendingInstalls.get(pendingId);
+          if (pending) {
+            cleanupPathSafely(pending.cleanupPath);
+            this.pendingInstalls.delete(pendingId);
+            console.log(`[SkillManager] Pending install ${pendingId} expired (TTL)`);
+          }
+        }, 5 * 60 * 1000);
+
+        this.pendingInstalls.set(pendingId, {
+          tempDir: localSource,
+          cleanupPath,
+          root,
+          skillDirs,
+          timer,
+        });
+
+        return {
+          success: true,
+          auditReport,
+          pendingInstallId: pendingId,
+        };
+      }
+
+      // Safe or scan failed — install directly
+      console.log(`[SkillManager] Skill is safe (or scan failed), installing directly`);
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
         let targetDir = resolveWithin(root, folderName);
@@ -1322,6 +1573,263 @@ export class SkillManager {
       cleanupPathSafely(cleanupPath);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to download skill' };
     }
+  }
+
+  async upgradeSkill(skillId: string, downloadUrl: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {
+    // Prevent concurrent upgrades of the same skill
+    if (this.upgradingSkillIds.has(skillId)) {
+      return { success: false, error: `Skill "${skillId}" is already being upgraded` };
+    }
+
+    // Find the installed skill
+    const installedSkills = this.listSkills();
+    const installed = installedSkills.find(s => s.id === skillId);
+    if (!installed) {
+      return { success: false, error: `Skill "${skillId}" is not installed` };
+    }
+
+    const existingSkillDir = path.dirname(installed.skillPath);
+    if (!fs.existsSync(existingSkillDir)) {
+      return { success: false, error: `Skill directory not found: ${existingSkillDir}` };
+    }
+
+    this.upgradingSkillIds.add(skillId);
+    try {
+      return await this.performUpgradeDownload(skillId, downloadUrl, existingSkillDir);
+    } finally {
+      this.upgradingSkillIds.delete(skillId);
+    }
+  }
+
+  private async performUpgradeDownload(skillId: string, downloadUrl: string, existingSkillDir: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {    let cleanupPath: string | null = null;
+    try {
+      console.log(`[SkillManager] starting upgrade for skill "${skillId}"`);
+      const root = this.ensureSkillsRoot();
+
+      // Download new version (reuse downloadSkill's download logic)
+      const tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-skill-upgrade-'));
+      cleanupPath = tempRoot;
+
+      let localSource: string;
+      if (isRemoteZipUrl(downloadUrl)) {
+        localSource = await downloadZipUrl(downloadUrl, tempRoot);
+      } else {
+        const normalized = this.normalizeGitSource(downloadUrl);
+        if (!normalized) {
+          cleanupPathSafely(cleanupPath);
+          return { success: false, error: 'Invalid download URL' };
+        }
+        const repoName = normalizeFolderName(normalized.repoNameHint || deriveRepoName(normalized.repoUrl));
+        const clonePath = path.join(tempRoot, repoName);
+        const githubSource = parseGithubRepoSource(normalized.repoUrl);
+        let downloadedSourceRoot = clonePath;
+        let downloaded = false;
+
+        if (githubSource) {
+          try {
+            downloadedSourceRoot = await downloadGithubArchive(githubSource, tempRoot, normalized.ref);
+            downloaded = true;
+          } catch {
+            // Fall through to git clone
+          }
+        }
+
+        if (!downloaded) {
+          const cloneArgs = ['clone', '--depth', '1'];
+          if (normalized.ref) cloneArgs.push('--branch', normalized.ref);
+          cloneArgs.push(normalized.repoUrl, clonePath);
+          const gitRuntime = resolveGitCommand();
+          await runCommand(gitRuntime.command, cloneArgs, { env: gitRuntime.env });
+        }
+
+        if (normalized.sourceSubpath) {
+          const scopedSource = resolveWithin(downloadedSourceRoot, normalized.sourceSubpath);
+          if (!fs.existsSync(scopedSource)) {
+            cleanupPathSafely(cleanupPath);
+            return { success: false, error: `Path "${normalized.sourceSubpath}" not found` };
+          }
+          localSource = fs.statSync(scopedSource).isFile() && path.basename(scopedSource) === SKILL_FILE_NAME
+            ? path.dirname(scopedSource)
+            : scopedSource;
+        } else {
+          localSource = downloadedSourceRoot;
+        }
+      }
+
+      const skillDirs = collectSkillDirsFromSource(localSource);
+      if (skillDirs.length === 0) {
+        cleanupPathSafely(cleanupPath);
+        return { success: false, error: t('skillErrNoSkillMd') };
+      }
+
+      // Find the matching skill dir for this ID
+      const matchingSkillDir = skillDirs.find(d => normalizeFolderName(path.basename(d)) === skillId) || skillDirs[0];
+
+      // Security scan
+      let auditReport: SkillSecurityReport | null = null;
+      try {
+        const reports = await scanMultipleSkillDirs([matchingSkillDir]);
+        auditReport = mergeReports(reports);
+      } catch (err) {
+        console.warn('[SkillManager] Security scan failed (non-blocking):', err);
+      }
+
+      // If risk detected, cache for user confirmation
+      if (auditReport && auditReport.riskLevel !== 'safe') {
+        const pendingId = crypto.randomUUID();
+        console.log(`[SkillManager] Upgrade risk detected (${auditReport.riskLevel}), pending confirmation: ${pendingId}`);
+        const timer = setTimeout(() => {
+          const pending = this.pendingInstalls.get(pendingId);
+          if (pending) {
+            cleanupPathSafely(pending.cleanupPath);
+            this.pendingInstalls.delete(pendingId);
+          }
+        }, 5 * 60 * 1000);
+
+        this.pendingInstalls.set(pendingId, {
+          tempDir: localSource,
+          cleanupPath,
+          root,
+          skillDirs: [matchingSkillDir],
+          timer,
+          isUpgrade: true,
+          existingSkillDir,
+        });
+
+        // Ownership of cleanupPath transferred to pendingInstalls
+        cleanupPath = null;
+        return { success: true, auditReport, pendingInstallId: pendingId };
+      }
+
+      // Safe — perform upgrade
+      this.performSkillUpgrade(matchingSkillDir, existingSkillDir);
+
+      cleanupPathSafely(cleanupPath);
+      cleanupPath = null;
+
+      this.startWatching();
+      this.notifySkillsChanged();
+      return { success: true, skills: this.listSkills() };
+    } catch (error) {
+      cleanupPathSafely(cleanupPath);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to upgrade skill' };
+    }
+  }
+
+  private performSkillUpgrade(newSkillDir: string, existingSkillDir: string): void {
+    const upgradingDir = existingSkillDir + '.upgrading';
+
+    // Back up .env and _meta.json
+    let envBackup: Buffer | null = null;
+    let metaBackup: Buffer | null = null;
+    const envPath = path.join(existingSkillDir, '.env');
+    const metaPath = path.join(existingSkillDir, '_meta.json');
+    if (fs.existsSync(envPath)) {
+      envBackup = fs.readFileSync(envPath);
+    }
+    if (fs.existsSync(metaPath)) {
+      metaBackup = fs.readFileSync(metaPath);
+    }
+
+    // Atomic rename old dir to .upgrading backup
+    fs.renameSync(existingSkillDir, upgradingDir);
+
+    try {
+      // Copy new version to original path
+      cpRecursiveSync(newSkillDir, existingSkillDir);
+
+      // Restore .env and _meta.json
+      if (envBackup !== null) {
+        fs.writeFileSync(path.join(existingSkillDir, '.env'), envBackup);
+      }
+      if (metaBackup !== null) {
+        fs.writeFileSync(path.join(existingSkillDir, '_meta.json'), metaBackup);
+      }
+    } catch (error) {
+      // Roll back: remove partial new dir and restore backup
+      console.error('[SkillManager] upgrade copy failed, rolling back:', error);
+      if (fs.existsSync(existingSkillDir)) {
+        fs.rmSync(existingSkillDir, { recursive: true, force: true });
+      }
+      fs.renameSync(upgradingDir, existingSkillDir);
+      throw error;
+    }
+
+    // Remove backup
+    fs.rmSync(upgradingDir, { recursive: true, force: true });
+  }
+
+  confirmPendingInstall(
+    pendingId: string,
+    action: SecurityReportAction
+  ): { success: boolean; skills?: SkillRecord[]; error?: string } {
+    console.log(`[SkillManager] confirmPendingInstall: id=${pendingId}, action=${action}`);
+    const pending = this.pendingInstalls.get(pendingId);
+    if (!pending) {
+      console.warn(`[SkillManager] Pending install not found: ${pendingId}`);
+      return { success: false, error: 'No pending install found' };
+    }
+
+    clearTimeout(pending.timer);
+    this.pendingInstalls.delete(pendingId);
+
+    if (action === 'cancel') {
+      cleanupPathSafely(pending.cleanupPath);
+      return { success: true };
+    }
+
+    // Install the skill(s)
+    const installedIds: string[] = [];
+
+    // Upgrade path: overwrite existing skill directory
+    if (pending.isUpgrade && pending.existingSkillDir) {
+      for (const skillDir of pending.skillDirs) {
+        this.performSkillUpgrade(skillDir, pending.existingSkillDir);
+        installedIds.push(path.basename(pending.existingSkillDir));
+      }
+    } else {
+      // Fresh install path: find unique directory name
+      for (const skillDir of pending.skillDirs) {
+        const folderName = normalizeFolderName(path.basename(skillDir));
+        let targetDir = resolveWithin(pending.root, folderName);
+        let suffix = 1;
+        while (fs.existsSync(targetDir)) {
+          targetDir = resolveWithin(pending.root, `${folderName}-${suffix}`);
+          suffix += 1;
+        }
+        cpRecursiveSync(skillDir, targetDir);
+        installedIds.push(path.basename(targetDir));
+      }
+    }
+
+    cleanupPathSafely(pending.cleanupPath);
+
+    // If user chose 'installDisabled', disable all newly installed skills
+    if (action === 'installDisabled') {
+      for (const id of installedIds) {
+        try {
+          this.setSkillEnabled(id, false);
+        } catch {
+          // Non-critical
+        }
+      }
+    }
+
+    this.startWatching();
+    this.notifySkillsChanged();
+    return { success: true, skills: this.listSkills() };
   }
 
   startWatching(): void {
@@ -1368,6 +1876,7 @@ export class SkillManager {
       clearTimeout(this.notifyTimer);
     }
     this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
       this.startWatching();
       this.notifySkillsChanged();
     }, WATCH_DEBOUNCE_MS);
@@ -1379,6 +1888,21 @@ export class SkillManager {
         win.webContents.send('skills:changed');
       }
     });
+    // Notify external listeners (e.g. OpenClaw AGENTS.md sync)
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn('[skills] onSkillsChanged listener error:', error);
+      }
+    }
+  }
+
+  onSkillsChanged(listener: () => void): () => void {
+    this.changeListeners.push(listener);
+    return () => {
+      this.changeListeners = this.changeListeners.filter(l => l !== listener);
+    };
   }
 
   private parseSkillDir(
@@ -1521,7 +2045,15 @@ export class SkillManager {
         const eqIdx = trimmed.indexOf('=');
         if (eqIdx < 0) continue;
         const key = trimmed.slice(0, eqIdx).trim();
-        const value = trimmed.slice(eqIdx + 1).trim();
+        let value = trimmed.slice(eqIdx + 1).trim();
+        // Strip surrounding quotes added by setSkillConfig / manual edits.
+        // Double-quoted values may contain escape sequences (\", \\) that need reversal.
+        // Single-quoted values are taken literally (no escape processing), matching dotenv behavior.
+        if (value.startsWith('"') && value.endsWith('"')) {
+          value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        } else if (value.startsWith("'") && value.endsWith("'")) {
+          value = value.slice(1, -1);
+        }
         config[key] = value;
       }
       return { success: true, config };
@@ -1536,7 +2068,16 @@ export class SkillManager {
       const envPath = path.join(skillDir, '.env');
       const lines = Object.entries(config)
         .filter(([key]) => key.trim())
-        .map(([key, value]) => `${key}=${value}`);
+        .map(([key, value]) => {
+          // Wrap value in double quotes if it contains characters that dotenv
+          // would misinterpret (e.g. # treated as inline comment, or spaces)
+          if (value.includes('#') || value.includes(' ') || value.includes('"') || value.includes("'")) {
+            // Escape any existing double quotes inside the value
+            const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            return `${key}="${escaped}"`;
+          }
+          return `${key}=${value}`;
+        });
       fs.writeFileSync(envPath, lines.join('\n') + '\n', 'utf8');
       return { success: true };
     } catch (error) {

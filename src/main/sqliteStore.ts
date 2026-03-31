@@ -161,55 +161,24 @@ export class SqliteStore {
       ON user_memory_sources(memory_id, is_active);
     `);
 
-    // Create scheduled tasks tables
+    // Create agents table
     this.db.run(`
-      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+      CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        schedule_json TEXT NOT NULL,
-        prompt TEXT NOT NULL,
-        working_directory TEXT NOT NULL DEFAULT '',
         system_prompt TEXT NOT NULL DEFAULT '',
-        execution_mode TEXT NOT NULL DEFAULT 'auto',
-        expires_at TEXT,
-        notify_platforms_json TEXT NOT NULL DEFAULT '[]',
-        next_run_at_ms INTEGER,
-        last_run_at_ms INTEGER,
-        last_status TEXT,
-        last_error TEXT,
-        last_duration_ms INTEGER,
-        running_at_ms INTEGER,
-        consecutive_errors INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        identity TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        icon TEXT NOT NULL DEFAULT '',
+        skill_ids TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'custom',
+        preset_id TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
-    `);
-
-    this.db.run(`
-      CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
-        ON scheduled_tasks(enabled, next_run_at_ms);
-    `);
-
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS scheduled_task_runs (
-        id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        session_id TEXT,
-        status TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        finished_at TEXT,
-        duration_ms INTEGER,
-        error TEXT,
-        trigger_type TEXT NOT NULL DEFAULT 'scheduled',
-        FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id) ON DELETE CASCADE
-      );
-    `);
-
-    this.db.run(`
-      CREATE INDEX IF NOT EXISTS idx_task_runs_task_id
-        ON scheduled_task_runs(task_id, started_at DESC);
     `);
 
     // Create MCP servers table
@@ -288,35 +257,52 @@ export class SqliteStore {
       // Column might not exist yet.
     }
 
+    // Migration: Add agent_id column to cowork_sessions
     try {
-      this.db.run(`UPDATE cowork_sessions SET execution_mode = 'sandbox' WHERE execution_mode = 'container';`);
+      const sessionCols = this.db.exec("PRAGMA table_info(cowork_sessions);");
+      const sessionColNames = sessionCols[0]?.values.map((row) => row[1]) || [];
+      if (!sessionColNames.includes('agent_id')) {
+        this.db.run("ALTER TABLE cowork_sessions ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main';");
+        this.save();
+      }
+    } catch {
+      // Column already exists or migration not needed.
+    }
+
+    // Migration: Ensure default 'main' agent exists
+    try {
+      const mainAgent = this.db.exec("SELECT id FROM agents WHERE id = 'main'");
+      if (!mainAgent[0]?.values?.length) {
+        const now = Date.now();
+        // Read existing systemPrompt from cowork_config to inherit into main agent
+        let existingSystemPrompt = '';
+        try {
+          const spRow = this.db.exec("SELECT value FROM cowork_config WHERE key = 'systemPrompt'");
+          if (spRow[0]?.values?.[0]?.[0]) {
+            existingSystemPrompt = String(spRow[0].values[0][0]);
+          }
+        } catch {
+          // No existing systemPrompt
+        }
+        this.db.run(`
+          INSERT INTO agents (id, name, description, system_prompt, identity, model, icon, skill_ids, enabled, is_default, source, preset_id, created_at, updated_at)
+          VALUES ('main', 'main', '', ?, '', '', '', '[]', 1, 1, 'custom', '', ?, ?)
+        `, [existingSystemPrompt, now, now]);
+        this.save();
+      }
+    } catch (error) {
+      console.warn('Failed to ensure main agent:', error);
+    }
+
+    try {
+      this.db.run(`UPDATE cowork_sessions SET execution_mode = 'local' WHERE execution_mode = 'container';`);
       this.db.run(`
         UPDATE cowork_config
-        SET value = 'sandbox'
+        SET value = 'local'
         WHERE key = 'executionMode' AND value = 'container';
       `);
     } catch (error) {
       console.warn('Failed to migrate cowork execution mode:', error);
-    }
-
-    // Migration: Add expires_at and notify_platforms_json columns to scheduled_tasks
-    try {
-      const stColsResult = this.db.exec("PRAGMA table_info(scheduled_tasks);");
-      if (stColsResult[0]) {
-        const stColumns = stColsResult[0].values.map((row) => row[1]) || [];
-
-        if (!stColumns.includes('expires_at')) {
-          this.db.run('ALTER TABLE scheduled_tasks ADD COLUMN expires_at TEXT');
-          this.save();
-        }
-
-        if (!stColumns.includes('notify_platforms_json')) {
-          this.db.run("ALTER TABLE scheduled_tasks ADD COLUMN notify_platforms_json TEXT NOT NULL DEFAULT '[]'");
-          this.save();
-        }
-      }
-    } catch {
-      // Migration not needed or table doesn't exist yet.
     }
 
     this.migrateLegacyMemoryFileToUserMemories();

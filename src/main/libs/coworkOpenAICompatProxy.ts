@@ -1,5 +1,5 @@
 import http from 'http';
-import { BrowserWindow, session } from 'electron';
+import { session } from 'electron';
 import {
   anthropicToOpenAI,
   buildOpenAIChatCompletionsURL,
@@ -8,8 +8,6 @@ import {
   openAIToAnthropic,
   type OpenAIStreamChunk,
 } from './coworkFormatTransform';
-import type { ScheduledTaskStore, ScheduledTaskInput } from '../scheduledTaskStore';
-import type { Scheduler } from './scheduler';
 
 export type OpenAICompatUpstreamConfig = {
   baseURL: string;
@@ -74,22 +72,108 @@ const LOCAL_HOST = '127.0.0.1';
 const SANDBOX_HOST = '10.0.2.2';
 const GEMINI_FALLBACK_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 
+function isGeminiProvider(provider?: string, baseURL?: string): boolean {
+  return provider === 'gemini'
+    || Boolean(baseURL?.includes('generativelanguage.googleapis.com'));
+}
+
+const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
+  'patternProperties', 'additionalProperties', '$schema', '$id', '$ref', '$defs',
+  'definitions', 'examples', 'minLength', 'maxLength', 'minimum', 'maximum',
+  'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'pattern', 'format',
+  'default', 'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties',
+]);
+
+function sanitizeSchemaForGemini(schema: unknown): unknown {
+  if (schema === null || schema === undefined || typeof schema !== 'object') {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map(sanitizeSchemaForGemini);
+  }
+  const obj = schema as Record<string, unknown>;
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (GEMINI_UNSUPPORTED_SCHEMA_KEYS.has(key)) {
+      continue;
+    }
+    cleaned[key] = sanitizeSchemaForGemini(value);
+  }
+  return cleaned;
+}
+
+function sanitizeToolsForGemini(
+  openAIRequest: Record<string, unknown>,
+  provider?: string,
+  baseURL?: string,
+): void {
+  if (!isGeminiProvider(provider, baseURL)) {
+    return;
+  }
+  const tools = toArray(openAIRequest.tools);
+  if (tools.length === 0) {
+    return;
+  }
+  for (const tool of tools) {
+    const toolObj = toOptionalObject(tool);
+    if (!toolObj) continue;
+    const functionObj = toOptionalObject(toolObj.function);
+    if (functionObj?.parameters !== undefined) {
+      functionObj.parameters = sanitizeSchemaForGemini(functionObj.parameters);
+    }
+    if (toolObj.parameters !== undefined) {
+      toolObj.parameters = sanitizeSchemaForGemini(toolObj.parameters);
+    }
+  }
+}
+
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
 let upstreamConfig: OpenAICompatUpstreamConfig | null = null;
 let lastProxyError: string | null = null;
+let tokenRefresher: (() => Promise<string | null>) | null = null;
+let currentCoworkSessionId: string | null = null;
 const toolCallExtraContentById = new Map<string, unknown>();
+
+export function setCoworkProxySessionId(sessionId: string | null): void {
+  currentCoworkSessionId = sessionId;
+}
 const MAX_TOOL_CALL_EXTRA_CONTENT_CACHE = 1024;
 
-// --- Scheduled task API dependencies ---
-interface ScheduledTaskDeps {
-  getScheduledTaskStore: () => ScheduledTaskStore;
-  getScheduler: () => Scheduler;
-}
-let scheduledTaskDeps: ScheduledTaskDeps | null = null;
+// Regex to strip Claude SDK-injected time context prefix from user messages
+const TIME_CONTEXT_PREFIX_RE = /^\[.*?\]\s*##\s*Local Time Context[\s\S]*?(?=\n\S|$)/;
+// Regex to strip "Sender (untrusted metadata):" JSON block prefix
+const METADATA_PREFIX_RE = /^Sender \(untrusted metadata\):\s*```json\s*\{[^}]*}\s*```\s*/s;
 
-export function setScheduledTaskDeps(deps: ScheduledTaskDeps): void {
-  scheduledTaskDeps = deps;
+function extractLastUserMessageText(body: unknown): string | null {
+  const obj = toOptionalObject(body);
+  if (!obj) return null;
+  const messages = obj.messages;
+  if (!Array.isArray(messages)) return null;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = toOptionalObject(messages[i]);
+    if (!msg || msg.role !== 'user') continue;
+
+    let text: string | null = null;
+    if (typeof msg.content === 'string') {
+      text = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        const b = toOptionalObject(block);
+        if (b && b.type === 'text' && typeof b.text === 'string') {
+          text = b.text;
+          break;
+        }
+      }
+    }
+    if (text) {
+      text = text.replace(METADATA_PREFIX_RE, '').replace(TIME_CONTEXT_PREFIX_RE, '').trim();
+      if (text.length > 100) text = text.substring(0, 100);
+      return text || null;
+    }
+  }
+  return null;
 }
 
 function toOptionalObject(value: unknown): Record<string, unknown> | null {
@@ -137,18 +221,6 @@ function normalizeFunctionArguments(value: unknown): string {
   } catch {
     return '';
   }
-}
-
-function normalizeScheduledTaskWorkingDirectory(value: unknown): string {
-  const raw = typeof value === 'string' ? value.trim() : '';
-  if (!raw) return '';
-
-  const normalized = raw.replace(/\\/g, '/').replace(/\/+$/, '');
-  // Sandbox guest workspace roots are not valid host directories.
-  if (/^(?:[A-Za-z]:)?\/workspace(?:\/project)?$/i.test(normalized)) {
-    return '';
-  }
-  return raw;
 }
 
 function normalizeToolCallExtraContent(toolCallObj: Record<string, unknown>): unknown {
@@ -961,43 +1033,6 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
         return '';
       }
 
-      const collectStringValues = (input: unknown, out: string[]): void => {
-        if (typeof input === 'string') {
-          out.push(input);
-          return;
-        }
-        if (Array.isArray(input)) {
-          for (const item of input) collectStringValues(item, out);
-          return;
-        }
-        if (input && typeof input === 'object') {
-          for (const value of Object.values(input as Record<string, unknown>)) {
-            collectStringValues(value, out);
-          }
-        }
-      };
-
-      const scoreDecodedJsonText = (text: string): number => {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return -10000;
-        }
-
-        const values: string[] = [];
-        collectStringValues(parsed, values);
-        const joined = values.join('\n');
-        if (!joined) return 0;
-
-        const cjkCount = (joined.match(/[\u3400-\u9FFF]/g) || []).length;
-        const replacementCount = (joined.match(/\uFFFD/g) || []).length;
-        const mojibakeCount = (joined.match(/[ÃÂÐÑØÙÞæçèéêëìíîïðñòóôõöøùúûüýþÿ]/g) || []).length;
-        const nonAsciiCount = (joined.match(/[^\x00-\x7F]/g) || []).length;
-
-        return cjkCount * 4 + nonAsciiCount - replacementCount * 8 - mojibakeCount * 3;
-      };
-
       // BOM-aware decoding first.
       if (raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) {
         return new TextDecoder('utf-8', { fatal: false }).decode(raw.subarray(3));
@@ -1028,12 +1063,13 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
         }
 
         if (utf8Decoded && gbDecoded) {
-          const utf8Score = scoreDecodedJsonText(utf8Decoded);
-          const gbScore = scoreDecodedJsonText(gbDecoded);
-          if (gbScore > utf8Score) {
-            console.warn(`[CoworkProxy] Decoded request body using gb18030 (score ${gbScore} > utf8 ${utf8Score})`);
-            return gbDecoded;
-          }
+          // UTF-8 strict decode succeeded → the bytes ARE valid UTF-8.
+          // Genuine GB18030 CJK byte sequences (first byte 0xB0-0xF7,
+          // second byte 0xA1-0xFE) are almost never valid UTF-8, so if
+          // strict UTF-8 passes the body is overwhelmingly UTF-8.
+          // The previous scoring heuristic could false-positive on longer
+          // CJK strings where GB18030 reinterpretation also yields CJK
+          // characters with comparable scores.
           return utf8Decoded;
         }
 
@@ -2203,337 +2239,6 @@ async function handleChatCompletionsStreamResponse(
   res.end();
 }
 
-async function handleCreateScheduledTask(
-  req: http.IncomingMessage,
-  res: http.ServerResponse
-): Promise<void> {
-  if (!scheduledTaskDeps) {
-    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
-    return;
-  }
-
-  let body: string;
-  try {
-    body = await readRequestBody(req);
-  } catch {
-    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
-    return;
-  }
-
-  let input: any;
-  try {
-    input = JSON.parse(body);
-  } catch {
-    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
-    return;
-  }
-
-  // Validate required fields
-  if (!input.name?.trim()) {
-    writeJSON(res, 400, { success: false, error: 'Missing required field: name' } as any);
-    return;
-  }
-  if (!input.prompt?.trim()) {
-    writeJSON(res, 400, { success: false, error: 'Missing required field: prompt' } as any);
-    return;
-  }
-  if (!input.schedule?.type) {
-    writeJSON(res, 400, { success: false, error: 'Missing required field: schedule.type' } as any);
-    return;
-  }
-  if (!['at', 'interval', 'cron'].includes(input.schedule.type)) {
-    writeJSON(res, 400, { success: false, error: 'Invalid schedule type. Must be: at, interval, cron' } as any);
-    return;
-  }
-  if (input.schedule.type === 'cron' && !input.schedule.expression) {
-    writeJSON(res, 400, { success: false, error: 'Cron schedule requires expression field' } as any);
-    return;
-  }
-  if (input.schedule.type === 'at' && !input.schedule.datetime) {
-    writeJSON(res, 400, { success: false, error: 'At schedule requires datetime field' } as any);
-    return;
-  }
-
-  // Validate: "at" type must be in the future
-  if (input.schedule.type === 'at' && input.schedule.datetime) {
-    const targetMs = new Date(input.schedule.datetime).getTime();
-    if (targetMs <= Date.now()) {
-      writeJSON(res, 400, { success: false, error: 'Execution time must be in the future for one-time (at) tasks' } as any);
-      return;
-    }
-  }
-
-  // Validate: expiresAt must not be in the past
-  if (input.expiresAt) {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    if (input.expiresAt <= todayStr) {
-      writeJSON(res, 400, { success: false, error: 'Expiration date must be in the future' } as any);
-      return;
-    }
-  }
-
-  // Build ScheduledTaskInput with defaults
-  const taskInput: ScheduledTaskInput = {
-    name: input.name.trim(),
-    description: input.description || '',
-    schedule: input.schedule,
-    prompt: input.prompt.trim(),
-    workingDirectory: normalizeScheduledTaskWorkingDirectory(input.workingDirectory),
-    systemPrompt: input.systemPrompt || '',
-    executionMode: input.executionMode || 'auto',
-    expiresAt: input.expiresAt || null,
-    notifyPlatforms: input.notifyPlatforms || [],
-    enabled: input.enabled !== false,
-  };
-
-  try {
-    const task = scheduledTaskDeps.getScheduledTaskStore().createTask(taskInput);
-    scheduledTaskDeps.getScheduler().reschedule();
-
-    // Notify renderer to refresh task list
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('scheduledTask:statusUpdate', {
-        taskId: task.id,
-        state: task.state,
-      });
-    }
-
-    console.log(`[CoworkProxy] Scheduled task created via API: ${task.id} "${task.name}"`);
-    writeJSON(res, 201, { success: true, task } as any);
-  } catch (err: any) {
-    console.error('[CoworkProxy] Failed to create scheduled task:', err);
-    writeJSON(res, 500, { success: false, error: err.message } as any);
-  }
-}
-
-async function handleListScheduledTasks(
-  req: http.IncomingMessage,
-  res: http.ServerResponse
-): Promise<void> {
-  if (!scheduledTaskDeps) {
-    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
-    return;
-  }
-  try {
-    const tasks = scheduledTaskDeps.getScheduledTaskStore().listTasks();
-    writeJSON(res, 200, { success: true, tasks } as any);
-  } catch (err: any) {
-    console.error('[CoworkProxy] Failed to list scheduled tasks:', err);
-    writeJSON(res, 500, { success: false, error: err.message } as any);
-  }
-}
-
-async function handleGetScheduledTask(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string
-): Promise<void> {
-  if (!scheduledTaskDeps) {
-    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
-    return;
-  }
-  try {
-    const task = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
-    if (!task) {
-      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
-      return;
-    }
-    writeJSON(res, 200, { success: true, task } as any);
-  } catch (err: any) {
-    console.error('[CoworkProxy] Failed to get scheduled task:', err);
-    writeJSON(res, 500, { success: false, error: err.message } as any);
-  }
-}
-
-async function handleUpdateScheduledTask(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string
-): Promise<void> {
-  if (!scheduledTaskDeps) {
-    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
-    return;
-  }
-
-  // Verify task exists first
-  const existing = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
-  if (!existing) {
-    writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
-    return;
-  }
-
-  let body: string;
-  try {
-    body = await readRequestBody(req);
-  } catch {
-    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
-    return;
-  }
-
-  let input: any;
-  try {
-    input = JSON.parse(body);
-  } catch {
-    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
-    return;
-  }
-
-  // Validate schedule if provided
-  if (input.schedule !== undefined) {
-    if (!input.schedule?.type) {
-      writeJSON(res, 400, { success: false, error: 'schedule.type is required when schedule is provided' } as any);
-      return;
-    }
-    if (!['at', 'interval', 'cron'].includes(input.schedule.type)) {
-      writeJSON(res, 400, { success: false, error: 'Invalid schedule type. Must be: at, interval, cron' } as any);
-      return;
-    }
-    if (input.schedule.type === 'cron' && !input.schedule.expression) {
-      writeJSON(res, 400, { success: false, error: 'Cron schedule requires expression field' } as any);
-      return;
-    }
-    if (input.schedule.type === 'at') {
-      if (!input.schedule.datetime) {
-        writeJSON(res, 400, { success: false, error: 'At schedule requires datetime field' } as any);
-        return;
-      }
-      if (new Date(input.schedule.datetime).getTime() <= Date.now()) {
-        writeJSON(res, 400, { success: false, error: 'Execution time must be in the future for one-time (at) tasks' } as any);
-        return;
-      }
-    }
-  }
-
-  // Validate expiresAt if provided
-  if (input.expiresAt !== undefined && input.expiresAt !== null) {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    if (input.expiresAt <= todayStr) {
-      writeJSON(res, 400, { success: false, error: 'Expiration date must be in the future' } as any);
-      return;
-    }
-  }
-
-  // Normalize workingDirectory if provided
-  const updateInput: Partial<ScheduledTaskInput> = { ...input };
-  if (input.workingDirectory !== undefined) {
-    updateInput.workingDirectory = normalizeScheduledTaskWorkingDirectory(input.workingDirectory);
-  }
-
-  try {
-    const task = scheduledTaskDeps.getScheduledTaskStore().updateTask(id, updateInput);
-    if (!task) {
-      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
-      return;
-    }
-    scheduledTaskDeps.getScheduler().reschedule();
-
-    // Notify renderer to refresh task list
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('scheduledTask:statusUpdate', {
-        taskId: task.id,
-        state: task.state,
-      });
-    }
-
-    console.log(`[CoworkProxy] Scheduled task updated via API: ${task.id} "${task.name}"`);
-    writeJSON(res, 200, { success: true, task } as any);
-  } catch (err: any) {
-    console.error('[CoworkProxy] Failed to update scheduled task:', err);
-    writeJSON(res, 500, { success: false, error: err.message } as any);
-  }
-}
-
-async function handleDeleteScheduledTask(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string
-): Promise<void> {
-  if (!scheduledTaskDeps) {
-    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
-    return;
-  }
-
-  const existing = scheduledTaskDeps.getScheduledTaskStore().getTask(id);
-  if (!existing) {
-    writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
-    return;
-  }
-
-  try {
-    scheduledTaskDeps.getScheduledTaskStore().deleteTask(id);
-    scheduledTaskDeps.getScheduler().reschedule();
-
-    // Notify renderer to refresh task list
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('scheduledTask:statusUpdate', {
-        taskId: id,
-        state: null,
-      });
-    }
-
-    console.log(`[CoworkProxy] Scheduled task deleted via API: ${id} "${existing.name}"`);
-    writeJSON(res, 200, { success: true } as any);
-  } catch (err: any) {
-    console.error('[CoworkProxy] Failed to delete scheduled task:', err);
-    writeJSON(res, 500, { success: false, error: err.message } as any);
-  }
-}
-
-async function handleToggleScheduledTask(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string
-): Promise<void> {
-  if (!scheduledTaskDeps) {
-    writeJSON(res, 503, { success: false, error: 'Scheduled task service not available' } as any);
-    return;
-  }
-
-  let body: string;
-  try {
-    body = await readRequestBody(req);
-  } catch {
-    writeJSON(res, 400, { success: false, error: 'Invalid request body' } as any);
-    return;
-  }
-
-  let input: any;
-  try {
-    input = JSON.parse(body);
-  } catch {
-    writeJSON(res, 400, { success: false, error: 'Invalid JSON' } as any);
-    return;
-  }
-
-  if (typeof input.enabled !== 'boolean') {
-    writeJSON(res, 400, { success: false, error: 'Field "enabled" (boolean) is required' } as any);
-    return;
-  }
-
-  try {
-    const { task, warning } = scheduledTaskDeps.getScheduledTaskStore().toggleTask(id, input.enabled);
-    if (!task) {
-      writeJSON(res, 404, { success: false, error: `Task not found: ${id}` } as any);
-      return;
-    }
-    scheduledTaskDeps.getScheduler().reschedule();
-
-    // Notify renderer to refresh task list
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('scheduledTask:statusUpdate', {
-        taskId: task.id,
-        state: task.state,
-      });
-    }
-
-    console.log(`[CoworkProxy] Scheduled task toggled via API: ${task.id} "${task.name}" enabled=${input.enabled}`);
-    writeJSON(res, 200, { success: true, task, warning } as any);
-  } catch (err: any) {
-    console.error('[CoworkProxy] Failed to toggle scheduled task:', err);
-    writeJSON(res, 500, { success: false, error: err.message } as any);
-  }
-}
-
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -2551,34 +2256,6 @@ async function handleRequest(
     return;
   }
 
-  // Scheduled task API
-  const TASK_LIST_PATH = '/api/scheduled-tasks';
-  const TASK_ITEM_RE = /^\/api\/scheduled-tasks\/([^/]+)$/;
-  const TASK_TOGGLE_RE = /^\/api\/scheduled-tasks\/([^/]+)\/toggle$/;
-
-  if (method === 'GET' && url.pathname === TASK_LIST_PATH) {
-    await handleListScheduledTasks(req, res);
-    return;
-  }
-  if (method === 'POST' && url.pathname === TASK_LIST_PATH) {
-    await handleCreateScheduledTask(req, res);
-    return;
-  }
-
-  // Toggle check BEFORE item check (more specific path)
-  const toggleMatch = TASK_TOGGLE_RE.exec(url.pathname);
-  if (method === 'POST' && toggleMatch) {
-    await handleToggleScheduledTask(req, res, toggleMatch[1]);
-    return;
-  }
-
-  const itemMatch = TASK_ITEM_RE.exec(url.pathname);
-  if (itemMatch) {
-    const id = itemMatch[1];
-    if (method === 'GET') { await handleGetScheduledTask(req, res, id); return; }
-    if (method === 'PUT') { await handleUpdateScheduledTask(req, res, id); return; }
-    if (method === 'DELETE') { await handleDeleteScheduledTask(req, res, id); return; }
-  }
   console.log(`[CoworkProxy] ${method} ${url.pathname}`);
 
   if (method === 'POST' && url.pathname === '/api/event_logging/batch') {
@@ -2703,6 +2380,19 @@ async function handleRequest(
   }
 
   const openAIRequest = anthropicToOpenAI(parsedRequestBody);
+
+  // Inject session_id and user_message for lobsterai-server logging only.
+  // Strict providers (e.g. Gemini) reject unknown payload fields.
+  if (upstreamConfig.provider === 'lobsterai-server') {
+    if (currentCoworkSessionId) {
+      openAIRequest.session_id = currentCoworkSessionId;
+    }
+    const extractedUserMessage = extractLastUserMessageText(parsedRequestBody);
+    if (extractedUserMessage) {
+      openAIRequest.user_message = extractedUserMessage;
+    }
+  }
+
   if (!openAIRequest.model) {
     openAIRequest.model = upstreamConfig.model;
   }
@@ -2722,6 +2412,7 @@ async function handleRequest(
   filterOpenAIToolsForProvider(openAIRequest, upstreamConfig.provider);
   remapMessageRolesForMiniMax(openAIRequest, upstreamConfig.provider);
   hydrateOpenAIRequestToolCalls(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
+  sanitizeToolsForGemini(openAIRequest, upstreamConfig.provider, upstreamConfig.baseURL);
 
   if (upstreamAPIType === 'chat_completions') {
     normalizeMaxTokensFieldForOpenAIProvider(openAIRequest, upstreamConfig.provider);
@@ -2749,7 +2440,11 @@ async function handleRequest(
     'Content-Type': 'application/json',
   };
   if (upstreamConfig.apiKey) {
-    headers.Authorization = `Bearer ${upstreamConfig.apiKey}`;
+    if (isGeminiProvider(upstreamConfig.provider, upstreamConfig.baseURL)) {
+      headers['x-goog-api-key'] = upstreamConfig.apiKey;
+    } else {
+      headers.Authorization = `Bearer ${upstreamConfig.apiKey}`;
+    }
   }
 
   const targetURLs = buildUpstreamTargetUrls(upstreamConfig.baseURL, upstreamAPIType);
@@ -2785,6 +2480,30 @@ async function handleRequest(
   }
 
   if (!upstreamResponse.ok) {
+    // 401/403 from lobsterai-server likely means the JWT accessToken expired.
+    // Refresh the token and retry once before falling through to other error handling.
+    if ((upstreamResponse.status === 401 || upstreamResponse.status === 403) && tokenRefresher) {
+      console.log(`[CoworkProxy] Got ${upstreamResponse.status}, attempting token refresh and retry...`);
+      try {
+        const newToken = await tokenRefresher();
+        if (newToken) {
+          if (isGeminiProvider(upstreamConfig?.provider, upstreamConfig?.baseURL)) {
+            headers['x-goog-api-key'] = newToken;
+          } else {
+            headers.Authorization = `Bearer ${newToken}`;
+          }
+          if (upstreamConfig) {
+            upstreamConfig.apiKey = newToken;
+          }
+          upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
+          const retryDuration = Date.now() - fetchStartTime;
+          console.log(`[CoworkProxy] Token refresh retry: status=${upstreamResponse.status}, ok=${upstreamResponse.ok}, fetchTime=${retryDuration}ms`);
+        }
+      } catch (refreshError) {
+        console.warn('[CoworkProxy] Token refresh retry failed:', refreshError);
+      }
+    }
+
     if (upstreamResponse.status === 404 && targetURLs.length > 1) {
       for (let i = 1; i < targetURLs.length; i += 1) {
         const retryURL = targetURLs[i];
@@ -2964,6 +2683,7 @@ export const __openAICompatProxyTestUtils = {
   processResponsesStreamEvent,
   convertChatCompletionsRequestToResponsesRequest,
   filterOpenAIToolsForProvider,
+  isGeminiProvider,
 };
 
 export async function startCoworkOpenAICompatProxy(): Promise<void> {
@@ -3033,21 +2753,20 @@ export function configureCoworkOpenAICompatProxy(config: OpenAICompatUpstreamCon
   lastProxyError = null;
 }
 
+/**
+ * Set a callback that refreshes the auth token and returns the new accessToken.
+ * Called by the proxy on 401/403 to retry with a fresh token.
+ */
+export function setProxyTokenRefresher(refresher: () => Promise<string | null>): void {
+  tokenRefresher = refresher;
+}
+
 export function getCoworkOpenAICompatProxyBaseURL(target: OpenAICompatProxyTarget = 'local'): string | null {
   if (!proxyServer || !proxyPort) {
     return null;
   }
   const host = target === 'sandbox' ? SANDBOX_HOST : LOCAL_HOST;
   return `http://${host}:${proxyPort}`;
-}
-
-/**
- * Get the proxy base URL for internal API use (scheduled tasks, etc.).
- * Unlike getCoworkOpenAICompatProxyBaseURL which is for the LLM proxy,
- * this always returns the local proxy URL regardless of API format.
- */
-export function getInternalApiBaseURL(): string | null {
-  return getCoworkOpenAICompatProxyBaseURL('local');
 }
 
 export function getCoworkOpenAICompatProxyStatus(): OpenAICompatProxyStatus {

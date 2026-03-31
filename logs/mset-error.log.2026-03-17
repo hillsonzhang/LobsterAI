@@ -1,0 +1,1 @@
+{"timestamp":"2026-03-17 12:24:21.068 +08:00","level":"ERROR","fields":{"message":"未找到 MSET_HOME 环境变量，将使用默认路径"},"target":"mset","filename":"src\\main.rs","line_number":118,"threadName":"main","threadId":"ThreadId(1)"}

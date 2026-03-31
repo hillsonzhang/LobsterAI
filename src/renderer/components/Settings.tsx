@@ -9,7 +9,7 @@ import { decryptSecret, encryptWithPassword, decryptWithPassword, EncryptedPaylo
 import { coworkService } from '../services/cowork';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
 import ErrorMessage from './ErrorMessage';
-import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, ShieldCheckIcon, EnvelopeIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, Cog6ToothIcon, SignalIcon, CheckCircleIcon, XCircleIcon, CubeIcon, ChatBubbleLeftIcon, EnvelopeIcon, CpuChipIcon, InformationCircleIcon, UserCircleIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
 import PlusCircleIcon from './icons/PlusCircleIcon';
 import TrashIcon from './icons/TrashIcon';
@@ -20,13 +20,13 @@ import { setAvailableModels } from '../store/slices/modelSlice';
 import { RootState } from '../store';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
-  CoworkExecutionMode,
+  CoworkAgentEngine,
+  OpenClawEngineStatus,
   CoworkUserMemoryEntry,
   CoworkMemoryStats,
-  CoworkSandboxProgress,
-  CoworkSandboxStatus,
 } from '../types/cowork';
 import IMSettings from './im/IMSettings';
+import { imService } from '../services/im';
 import EmailSkillConfig from './skills/EmailSkillConfig';
 import { defaultConfig, type AppConfig, getVisibleProviders } from '../config';
 import {
@@ -47,7 +47,7 @@ import {
   CustomProviderIcon,
 } from './icons/providers';
 
-type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'envVars' | 'about';
+type TabType = 'general' | 'coworkAgentEngine' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'envVars' | 'about';
 
 export type SettingsOpenOptions = {
   initialTab?: TabType;
@@ -91,7 +91,7 @@ interface ProviderExportEntry {
   enabled: boolean;
   apiKey: PasswordEncryptedPayload;
   baseUrl: string;
-  apiFormat?: 'anthropic' | 'openai';
+  apiFormat?: 'anthropic' | 'openai' | 'gemini';
   codingPlanEnabled?: boolean;
   models?: Model[];
 }
@@ -199,6 +199,41 @@ const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
 const ABOUT_CONTACT_EMAIL = 'hillson.zhang@sf-dsc.com';
 const ABOUT_USER_MANUAL_URL = '';
 
+// MiniMax Portal OAuth constants
+const MINIMAX_OAUTH_CLIENT_ID = '78257093-7e40-4613-99e0-527b14b39113';
+const MINIMAX_OAUTH_SCOPE = 'group_id profile model.completion';
+const MINIMAX_OAUTH_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:user_code';
+const MINIMAX_BASE_URL_CN = 'https://api.minimaxi.com/anthropic';
+const MINIMAX_BASE_URL_GLOBAL = 'https://api.minimax.io/anthropic';
+const MINIMAX_CODE_ENDPOINT_CN = 'https://api.minimaxi.com/oauth/code';
+const MINIMAX_CODE_ENDPOINT_GLOBAL = 'https://api.minimax.io/oauth/code';
+const MINIMAX_TOKEN_ENDPOINT_CN = 'https://api.minimaxi.com/oauth/token';
+const MINIMAX_TOKEN_ENDPOINT_GLOBAL = 'https://api.minimax.io/oauth/token';
+
+type MiniMaxRegion = 'cn' | 'global';
+type MiniMaxOAuthPhase =
+  | { kind: 'idle' }
+  | { kind: 'requesting_code' }
+  | { kind: 'pending'; userCode: string; verificationUri: string }
+  | { kind: 'success' }
+  | { kind: 'error'; message: string };
+
+async function generateMiniMaxPkce(): Promise<{ verifier: string; challenge: string; state: string }> {
+  const verifierArray = new Uint8Array(32);
+  crypto.getRandomValues(verifierArray);
+  const verifier = btoa(String.fromCharCode(...verifierArray))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const encoded = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const stateArray = new Uint8Array(16);
+  crypto.getRandomValues(stateArray);
+  const state = btoa(String.fromCharCode(...stateArray))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  return { verifier, challenge, state };
+}
+
 const copyTextFallback = (text: string): boolean => {
   const textarea = document.createElement('textarea');
   textarea.value = text;
@@ -233,8 +268,8 @@ const copyTextToClipboard = async (text: string): Promise<boolean> => {
   }
 };
 
-const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | null => {
-  if (provider === 'openai' || provider === 'gemini' || provider === 'stepfun') {
+const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' | 'gemini' | null => {
+  if (provider === 'openai' || provider === 'stepfun') {
     return 'openai';
   }
   if (provider === 'youdaozhiyun') {
@@ -243,9 +278,12 @@ const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'openai' 
   if (provider === 'anthropic') {
     return 'anthropic';
   }
+  if (provider === 'gemini') {
+    return 'gemini';
+  }
   return null;
 };
-const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' => (
+const getEffectiveApiFormat = (provider: string, value: unknown): 'anthropic' | 'openai' | 'gemini' => (
   getFixedApiFormatForProvider(provider) ?? normalizeApiFormat(value)
 );
 const shouldShowApiFormatSelector = (provider: string): boolean => (
@@ -253,15 +291,15 @@ const shouldShowApiFormatSelector = (provider: string): boolean => (
 );
 const getProviderDefaultBaseUrl = (
   provider: ProviderType,
-  apiFormat: 'anthropic' | 'openai'
+  apiFormat: 'anthropic' | 'openai' | 'gemini'
 ): string | null => {
   const defaults = providerSwitchableDefaultBaseUrls[provider];
-  return defaults ? defaults[apiFormat] : null;
+  return defaults ? defaults[apiFormat as 'anthropic' | 'openai'] : null;
 };
 const resolveBaseUrl = (
   provider: ProviderType,
   baseUrl: string,
-  apiFormat: 'anthropic' | 'openai'
+  apiFormat: 'anthropic' | 'openai' | 'gemini'
 ): string => {
   if (baseUrl.trim()) return baseUrl;
   return getProviderDefaultBaseUrl(provider, apiFormat)
@@ -363,6 +401,16 @@ const getDefaultActiveProvider = (): ProviderType => {
   return firstEnabledProvider ?? providerKeys[0];
 };
 
+/** Join workspace directory with a filename using platform-aware separator. */
+const joinWorkspacePath = (dir: string | undefined, filename: string): string => {
+  const base = dir?.trim() || '~/.openclaw/workspace';
+  const sep = window.electron.platform === 'win32' ? '\\' : '/';
+  // Normalize: if base already ends with a separator, don't double it
+  return base.endsWith(sep) || base.endsWith('/') || base.endsWith('\\')
+    ? `${base}${filename}`
+    : `${base}${sep}${filename}`;
+};
+
 const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
   const dispatch = useDispatch();
   // 状态
@@ -372,6 +420,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const [isUpdatingAutoLaunch, setIsUpdatingAutoLaunch] = useState(false);
+  const [preventSleep, setPreventSleepState] = useState(false);
+  const [isUpdatingPreventSleep, setIsUpdatingPreventSleep] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(notice ?? null);
@@ -388,10 +438,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [activeProvider, setActiveProvider] = useState<ProviderType>(getDefaultActiveProvider());
   const [showApiKey, setShowApiKey] = useState(false);
 
+  // MiniMax OAuth state
+  const [minimaxOAuthPhase, setMinimaxOAuthPhase] = useState<MiniMaxOAuthPhase>({ kind: 'idle' });
+  const [minimaxOAuthRegion, setMinimaxOAuthRegion] = useState<MiniMaxRegion>('cn');
+  const minimaxOAuthCancelRef = useRef(false);
+
   // Add state for providers configuration
   const [providers, setProviders] = useState<ProvidersConfig>(() => getDefaultProviders());
 
-  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled);
+  const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'minimax' && providers.minimax.authType === 'oauth');
 
   // Environment variables state
   const [customEnvVars, setCustomEnvVars] = useState<Record<string, string>>({});
@@ -457,7 +512,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     if (updateCheckStatus === 'checking' || !appVersion) return;
     setUpdateCheckStatus('checking');
     try {
-      const info = await checkForAppUpdate(appVersion);
+      const info = await checkForAppUpdate(appVersion, true);
       if (info) {
         setUpdateCheckStatus('idle');
         onUpdateFound?.(info);
@@ -526,7 +581,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
   const coworkConfig = useSelector((state: RootState) => state.cowork.config);
 
-  const [coworkExecutionMode, setCoworkExecutionMode] = useState<CoworkExecutionMode>(coworkConfig.executionMode || 'local');
+  const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [coworkMemoryEntries, setCoworkMemoryEntries] = useState<CoworkUserMemoryEntry[]>([]);
@@ -536,17 +591,18 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   const [coworkMemoryEditingId, setCoworkMemoryEditingId] = useState<string | null>(null);
   const [coworkMemoryDraftText, setCoworkMemoryDraftText] = useState<string>('');
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
-  const [coworkSandboxStatus, setCoworkSandboxStatus] = useState<CoworkSandboxStatus | null>(null);
-  const [coworkSandboxLoading, setCoworkSandboxLoading] = useState(true);
-  const [coworkSandboxProgress, setCoworkSandboxProgress] = useState<CoworkSandboxProgress | null>(null);
-  const [coworkSandboxInstalling, setCoworkSandboxInstalling] = useState(false);
+  const [bootstrapIdentity, setBootstrapIdentity] = useState<string>('');
+  const [bootstrapUser, setBootstrapUser] = useState<string>('');
+  const [bootstrapSoul, setBootstrapSoul] = useState<string>('');
+  const [bootstrapLoaded, setBootstrapLoaded] = useState<boolean>(false);
+  const [openClawEngineStatus, setOpenClawEngineStatus] = useState<OpenClawEngineStatus | null>(null);
 
   useEffect(() => {
-    setCoworkExecutionMode(coworkConfig.executionMode || 'local');
+    setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
   }, [
-    coworkConfig.executionMode,
+    coworkConfig.agentEngine,
     coworkConfig.memoryEnabled,
     coworkConfig.memoryLlmJudgeEnabled,
   ]);
@@ -560,35 +616,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     }
   }, []);
 
-  const loadCoworkSandboxStatus = useCallback(async () => {
-    setCoworkSandboxLoading(true);
-    try {
-      const status = await coworkService.getSandboxStatus();
-      setCoworkSandboxStatus(status);
-      if (status?.progress) {
-        setCoworkSandboxProgress(status.progress);
-      }
-    } catch (loadError) {
-      console.error('Failed to load cowork sandbox status:', loadError);
-      setCoworkSandboxStatus(null);
-    } finally {
-      setCoworkSandboxLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    loadCoworkSandboxStatus();
-  }, [loadCoworkSandboxStatus]);
-
-  useEffect(() => {
-    const unsubscribe = coworkService.onSandboxDownloadProgress((progress) => {
-      setCoworkSandboxProgress(progress);
-      if (progress.percent !== undefined && progress.percent >= 1) {
-        void loadCoworkSandboxStatus();
-      }
+    let active = true;
+    void coworkService.getOpenClawEngineStatus().then((status) => {
+      if (!active || !status) return;
+      setOpenClawEngineStatus(status);
     });
-    return () => unsubscribe();
-  }, [loadCoworkSandboxStatus]);
+    const unsubscribe = coworkService.onOpenClawEngineStatus((status) => {
+      if (!active) return;
+      setOpenClawEngineStatus(status);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -610,7 +652,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       }).catch(err => {
         console.error('Failed to load auto-launch setting:', err);
       });
-      
+
+      // Load prevent-sleep setting
+      window.electron.preventSleep.get().then(({ enabled }) => {
+        setPreventSleepState(enabled);
+      }).catch(err => {
+        console.error('Failed to load prevent-sleep setting:', err);
+      });
+
       // Set up providers based on saved config
       if (config.api) {
         // For backward compatibility with older config
@@ -952,50 +1001,209 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     });
   };
 
-  const hasCoworkConfigChanges = coworkExecutionMode !== coworkConfig.executionMode
+  const handleMiniMaxDeviceLogin = async (region: MiniMaxRegion) => {
+    minimaxOAuthCancelRef.current = false;
+    setMinimaxOAuthPhase({ kind: 'requesting_code' });
+
+    const codeEndpoint = region === 'cn' ? MINIMAX_CODE_ENDPOINT_CN : MINIMAX_CODE_ENDPOINT_GLOBAL;
+    const tokenEndpoint = region === 'cn' ? MINIMAX_TOKEN_ENDPOINT_CN : MINIMAX_TOKEN_ENDPOINT_GLOBAL;
+    const defaultBaseUrl = region === 'cn' ? MINIMAX_BASE_URL_CN : MINIMAX_BASE_URL_GLOBAL;
+
+    try {
+      const { verifier, challenge, state } = await generateMiniMaxPkce();
+
+      const codeBody = [
+        'response_type=code',
+        `client_id=${encodeURIComponent(MINIMAX_OAUTH_CLIENT_ID)}`,
+        `scope=${encodeURIComponent(MINIMAX_OAUTH_SCOPE)}`,
+        `code_challenge=${encodeURIComponent(challenge)}`,
+        'code_challenge_method=S256',
+        `state=${encodeURIComponent(state)}`,
+      ].join('&');
+
+      const codeRes = await window.electron.api.fetch({
+        url: codeEndpoint,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+        },
+        body: codeBody,
+      });
+
+      if (!codeRes.ok) {
+        throw new Error(`MiniMax OAuth authorization failed: ${codeRes.status}`);
+      }
+
+      const codePayload = (codeRes.data ?? {}) as {
+        user_code?: string;
+        verification_uri?: string;
+        expired_in?: number;
+        interval?: number;
+        state?: string;
+        error?: string;
+      };
+
+      if (!codePayload.user_code || !codePayload.verification_uri) {
+        throw new Error(codePayload.error ?? 'MiniMax OAuth returned incomplete authorization payload');
+      }
+
+      if (codePayload.state !== state) {
+        throw new Error('MiniMax OAuth state mismatch: possible CSRF attack or session corruption');
+      }
+
+      try {
+        await window.electron.shell.openExternal(codePayload.verification_uri);
+      } catch { /* ignore: user can open manually */ }
+
+      setMinimaxOAuthPhase({
+        kind: 'pending',
+        userCode: codePayload.user_code,
+        verificationUri: codePayload.verification_uri,
+      });
+
+      let pollIntervalMs = codePayload.interval ?? 2000;
+      const expireTimeMs = codePayload.expired_in ?? (Date.now() + 5 * 60 * 1000);
+
+      while (Date.now() < expireTimeMs) {
+        if (minimaxOAuthCancelRef.current) {
+          setMinimaxOAuthPhase({ kind: 'idle' });
+          return;
+        }
+
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+
+        if (minimaxOAuthCancelRef.current) {
+          setMinimaxOAuthPhase({ kind: 'idle' });
+          return;
+        }
+
+        const tokenBody = [
+          `grant_type=${encodeURIComponent(MINIMAX_OAUTH_GRANT_TYPE)}`,
+          `client_id=${encodeURIComponent(MINIMAX_OAUTH_CLIENT_ID)}`,
+          `user_code=${encodeURIComponent(codePayload.user_code)}`,
+          `code_verifier=${encodeURIComponent(verifier)}`,
+        ].join('&');
+
+        const tokenRes = await window.electron.api.fetch({
+          url: tokenEndpoint,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+          },
+          body: tokenBody,
+        });
+
+        const tokenPayload = (tokenRes.data ?? {}) as {
+          status?: string;
+          access_token?: string;
+          refresh_token?: string;
+          expired_in?: number;
+          resource_url?: string;
+          notification_message?: string;
+          base_resp?: { status_code?: number; status_msg?: string };
+        };
+
+        if (tokenPayload.status === 'error') {
+          throw new Error(tokenPayload.base_resp?.status_msg ?? 'MiniMax OAuth error');
+        }
+
+        if (tokenPayload.status === 'success') {
+          if (!tokenPayload.access_token || !tokenPayload.refresh_token) {
+            throw new Error('MiniMax OAuth returned incomplete token payload');
+          }
+
+          let baseUrl = (tokenPayload.resource_url ?? '').trim();
+          if (baseUrl && !baseUrl.startsWith('http')) {
+            baseUrl = `https://${baseUrl}`;
+          }
+          if (!baseUrl) {
+            baseUrl = defaultBaseUrl;
+          }
+
+          setProviders(prev => ({
+            ...prev,
+            minimax: {
+              ...prev.minimax,
+              enabled: true,
+              apiKey: tokenPayload.access_token!,
+              baseUrl,
+              apiFormat: 'anthropic',
+              authType: 'oauth',
+              oauthRefreshToken: tokenPayload.refresh_token,
+              oauthTokenExpiresAt: tokenPayload.expired_in,
+              models: [...(defaultConfig.providers?.minimax.models ?? [])],
+            },
+          }));
+
+          setMinimaxOAuthPhase({ kind: 'success' });
+          setTimeout(() => setMinimaxOAuthPhase({ kind: 'idle' }), 1500);
+          return;
+        }
+
+        // Still pending — back off gradually
+        pollIntervalMs = Math.min(pollIntervalMs * 1.5, 10000);
+      }
+
+      throw new Error('MiniMax OAuth timed out waiting for authorization');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setMinimaxOAuthPhase({ kind: 'error', message });
+    }
+  };
+
+  const handleCancelMiniMaxLogin = () => {
+    minimaxOAuthCancelRef.current = true;
+    setMinimaxOAuthPhase({ kind: 'idle' });
+  };
+
+  const handleMiniMaxOAuthLogout = () => {
+    setProviders(prev => ({
+      ...prev,
+      minimax: {
+        ...prev.minimax,
+        apiKey: '',
+        oauthRefreshToken: undefined,
+        oauthTokenExpiresAt: undefined,
+      },
+    }));
+    setMinimaxOAuthPhase({ kind: 'idle' });
+  };
+
+  const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled;
+  const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
-  const coworkSandboxDisabled = !coworkSandboxStatus?.supported
-    || !coworkSandboxStatus?.runtimeReady
-    || !coworkSandboxStatus?.imageReady;
-
-  const coworkSandboxStatusHint = useMemo(() => {
-    if (coworkSandboxLoading) return i18nService.t('coworkSandboxChecking');
-    if (!coworkSandboxStatus?.supported) return i18nService.t('coworkSandboxUnsupported');
-    if (coworkSandboxStatus?.downloading) return i18nService.t('coworkSandboxDownloading');
-    if (!coworkSandboxStatus?.runtimeReady) return i18nService.t('coworkSandboxRuntimeMissing');
-    if (!coworkSandboxStatus?.imageReady) return i18nService.t('coworkSandboxImageMissing');
-    return '';
-  }, [coworkSandboxLoading, coworkSandboxStatus]);
-
-  const coworkSandboxPercent = useMemo(() => {
-    if (!coworkSandboxProgress) return null;
-    if (coworkSandboxProgress.percent !== undefined && Number.isFinite(coworkSandboxProgress.percent)) {
-      return Math.min(100, Math.max(0, Math.round(coworkSandboxProgress.percent * 100)));
+  const openClawProgressPercent = useMemo(() => {
+    if (typeof openClawEngineStatus?.progressPercent !== 'number' || !Number.isFinite(openClawEngineStatus.progressPercent)) {
+      return null;
     }
-    if (coworkSandboxProgress.total && coworkSandboxProgress.total > 0) {
-      return Math.min(100, Math.max(0, Math.round((coworkSandboxProgress.received / coworkSandboxProgress.total) * 100)));
+    return Math.max(0, Math.min(100, Math.round(openClawEngineStatus.progressPercent)));
+  }, [openClawEngineStatus]);
+
+  const resolveOpenClawStatusText = (status: OpenClawEngineStatus | null): string => {
+    if (!status) {
+      return i18nService.t('coworkOpenClawNotInstalledNotice');
     }
-    return null;
-  }, [coworkSandboxProgress]);
-
-  const coworkSandboxStageLabel = coworkSandboxProgress?.stage === 'image'
-    ? (i18nService.getLanguage() === 'zh' ? '镜像' : 'Image')
-    : (i18nService.getLanguage() === 'zh' ? '运行时' : 'Runtime');
-
-  const handleInstallCoworkSandbox = async () => {
-    setCoworkSandboxInstalling(true);
-    try {
-      const result = await coworkService.installSandbox();
-      if (result?.status) {
-        setCoworkSandboxStatus(result.status);
-        if (result.status.progress) {
-          setCoworkSandboxProgress(result.status.progress);
-        }
-      }
-    } finally {
-      setCoworkSandboxInstalling(false);
+    if (status.message?.trim()) {
+      return status.message.trim();
+    }
+    switch (status.phase) {
+      case 'not_installed':
+        return i18nService.t('coworkOpenClawNotInstalledNotice');
+      case 'installing':
+        return i18nService.t('coworkOpenClawInstalling');
+      case 'ready':
+        return i18nService.t('coworkOpenClawReadyNotice');
+      case 'starting':
+        return i18nService.t('coworkOpenClawStarting');
+      case 'error':
+        return i18nService.t('coworkOpenClawError');
+      case 'running':
+      default:
+        return i18nService.t('coworkOpenClawRunning');
     }
   };
 
@@ -1026,6 +1234,38 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     void loadCoworkMemoryData();
   }, [activeTab, loadCoworkMemoryData]);
 
+  /**
+   * Detect OpenClaw default template content and return empty string.
+   * Templates contain YAML frontmatter and specific marker phrases.
+   */
+  const stripDefaultTemplate = (content: string): string => {
+    if (!content.trim()) return '';
+    const TEMPLATE_MARKERS = [
+      'Fill this in during your first conversation',
+      "You're not a chatbot. You're becoming someone",
+      'Learn about the person you\'re helping',
+    ];
+    if (TEMPLATE_MARKERS.some((m) => content.includes(m))) return '';
+    return content;
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'coworkAgent') return;
+    if (!bootstrapLoaded) {
+      void (async () => {
+        const [identity, user, soul] = await Promise.all([
+          coworkService.readBootstrapFile('IDENTITY.md'),
+          coworkService.readBootstrapFile('USER.md'),
+          coworkService.readBootstrapFile('SOUL.md'),
+        ]);
+        setBootstrapIdentity(stripDefaultTemplate(identity));
+        setBootstrapUser(stripDefaultTemplate(user));
+        setBootstrapSoul(stripDefaultTemplate(soul));
+        setBootstrapLoaded(true);
+      })();
+    }
+  }, [activeTab, bootstrapLoaded]);
+
   const resetCoworkMemoryEditor = () => {
     setCoworkMemoryEditingId(null);
     setCoworkMemoryDraftText('');
@@ -1042,13 +1282,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         await coworkService.updateMemoryEntry({
           id: coworkMemoryEditingId,
           text,
-          status: 'created',
-          isExplicit: true,
         });
       } else {
         await coworkService.createMemoryEntry({
           text,
-          isExplicit: true,
         });
       }
       resetCoworkMemoryEditor();
@@ -1078,21 +1315,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       setError(deleteError instanceof Error ? deleteError.message : i18nService.t('coworkMemoryCrudDeleteFailed'));
     } finally {
       setCoworkMemoryListLoading(false);
-    }
-  };
-
-  const getMemoryStatusLabel = (status: CoworkUserMemoryEntry['status']): string => {
-    if (status === 'created') return i18nService.t('coworkMemoryStatusActive');
-    if (status === 'stale') return i18nService.t('coworkMemoryStatusInactive');
-    return i18nService.t('coworkMemoryStatusDeleted');
-  };
-
-  const formatMemoryUpdatedAt = (timestamp: number): string => {
-    if (!Number.isFinite(timestamp) || timestamp <= 0) return '-';
-    try {
-      return new Date(timestamp).toLocaleString();
-    } catch {
-      return '-';
     }
   };
 
@@ -1212,12 +1434,32 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       dispatch(setAvailableModels(allModels));
 
       if (hasCoworkConfigChanges) {
-        await coworkService.updateConfig({
-          executionMode: coworkExecutionMode,
+        const updated = await coworkService.updateConfig({
+          agentEngine: coworkAgentEngine,
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
         });
+        if (!updated) {
+          throw new Error(i18nService.t('coworkConfigSaveFailed'));
+        }
       }
+
+      // Save bootstrap files (IDENTITY.md, USER.md, SOUL.md) only if loaded
+      if (bootstrapLoaded) {
+        const results = await Promise.all([
+          coworkService.writeBootstrapFile('IDENTITY.md', bootstrapIdentity),
+          coworkService.writeBootstrapFile('USER.md', bootstrapUser),
+          coworkService.writeBootstrapFile('SOUL.md', bootstrapSoul),
+        ]);
+        if (results.some(r => !r)) {
+          throw new Error(i18nService.t('coworkBootstrapSaveFailed'));
+        }
+      }
+
+      // Sync IM gateway config (regenerate openclaw.json and restart gateway if running).
+      // This is done on every save regardless of activeTab, because the user may have
+      // edited IM config then switched tabs before clicking Save.
+      await imService.saveAndSyncConfig();
 
       didSaveRef.current = true;
       onClose();
@@ -1869,11 +2111,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   // 渲染标签页
   const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = useMemo(() => [
     { key: 'general',        label: i18nService.t('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
+    { key: 'coworkAgentEngine', label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
     { key: 'model',          label: i18nService.t('model'),          icon: <CubeIcon className="h-5 w-5" /> },
     { key: 'im',             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
     { key: 'email',          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
     { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
     { key: 'coworkSandbox',  label: i18nService.t('coworkSandbox'),  icon: <ShieldCheckIcon className="h-5 w-5" /> },
+    { key: 'coworkAgent',    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
     { key: 'envVars',         label: i18nService.t('envVars'),         icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" /></svg> },
     { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
     { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
@@ -1953,6 +2197,55 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                       autoLaunch ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </label>
+            </div>
+
+            {/* Prevent Sleep Section */}
+            <div>
+              <h4 className="text-sm font-medium dark:text-claude-darkText text-claude-text mb-3">
+                {i18nService.t('preventSleep')}
+              </h4>
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-sm dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                  {i18nService.t('preventSleepDescription')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={preventSleep}
+                  onClick={async () => {
+                    if (isUpdatingPreventSleep) return;
+                    const next = !preventSleep;
+                    setIsUpdatingPreventSleep(true);
+                    try {
+                      const result = await window.electron.preventSleep.set(next);
+                      if (result.success) {
+                        setPreventSleepState(next);
+                      } else {
+                        setError(result.error || 'Failed to update prevent-sleep setting');
+                      }
+                    } catch (err) {
+                      console.error('Failed to set prevent-sleep:', err);
+                      setError('Failed to update prevent-sleep setting');
+                    } finally {
+                      setIsUpdatingPreventSleep(false);
+                    }
+                  }}
+                  disabled={isUpdatingPreventSleep}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    isUpdatingPreventSleep ? 'opacity-50 cursor-not-allowed' : ''
+                  } ${
+                    preventSleep
+                      ? 'bg-claude-accent'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      preventSleep ? 'translate-x-6' : 'translate-x-1'
                     }`}
                   />
                 </button>
@@ -2119,151 +2412,73 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
       case 'email':
         return <EmailSkillConfig />;
 
-      case 'coworkSandbox':
+      case 'coworkAgentEngine':
         return (
           <div className="space-y-6">
             <div className="space-y-3">
-              <label className="block text-sm font-medium text-claude-text">
-                {i18nService.t('coworkExecutionMode')}
-              </label>
-              <div className="space-y-2">
-                {([
-                  {
-                    value: 'auto',
-                    label: i18nService.t('coworkExecutionModeAuto'),
-                    hint: i18nService.t('coworkExecutionModeAutoHint'),
-                  },
-                  {
-                    value: 'local',
-                    label: i18nService.t('coworkExecutionModeLocal'),
-                    hint: i18nService.t('coworkExecutionModeLocalHint'),
-                  },
-                  {
-                    value: 'sandbox',
-                    label: i18nService.t('coworkExecutionModeSandbox'),
-                    hint: i18nService.t('coworkExecutionModeSandboxHint'),
-                  },
-                ] as Array<{ value: CoworkExecutionMode; label: string; hint: string }>).map((option) => {
-                  const isDisabled = option.value === 'sandbox' && coworkSandboxDisabled;
-                  return (
-                    <label
-                      key={option.value}
-                      className={`flex items-start gap-3 rounded-xl border px-3 py-2 text-sm transition-colors ${
-                        isDisabled
-                          ? 'cursor-not-allowed opacity-60 border-claude-border'
-                          : 'cursor-pointer border-claude-border hover:border-claude-accent'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="cowork-execution-mode"
-                        value={option.value}
-                        checked={coworkExecutionMode === option.value}
-                        onChange={() => setCoworkExecutionMode(option.value)}
-                        disabled={isDisabled}
-                        className="mt-1"
-                      />
-                      <span>
-                        <span className="block font-medium text-claude-text">
-                          {option.label}
-                        </span>
-                        <span className="block text-xs text-claude-textSecondary">
-                          {option.hint}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
+              <div className="flex items-start gap-3 rounded-xl border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border">
+                <input
+                  type="radio"
+                  checked={true}
+                  readOnly
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block font-medium dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('coworkAgentEngineOpenClaw')}
+                  </span>
+                  <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkAgentEngineOpenClawHint')}
+                  </span>
+                </span>
               </div>
-
-              {coworkSandboxStatusHint && (
-                <div className="text-xs text-claude-textSecondary">
-                  {coworkSandboxStatusHint}
-                </div>
-              )}
-
-              {coworkSandboxProgress && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-claude-textSecondary">
-                    <span>
-                      {coworkSandboxStageLabel}
-                    </span>
-                    {coworkSandboxPercent !== null && (
-                      <span>{coworkSandboxPercent}%</span>
-                    )}
-                  </div>
-                  <div className="h-2 rounded-full bg-claude-border overflow-hidden">
-                    <div
-                      className="h-full bg-claude-accent transition-all"
-                      style={{ width: `${coworkSandboxPercent ?? 0}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {coworkSandboxDisabled && coworkSandboxStatus?.supported && (
-                <button
-                  type="button"
-                  onClick={handleInstallCoworkSandbox}
-                  disabled={coworkSandboxInstalling || coworkSandboxLoading}
-                  className="inline-flex items-center justify-center px-4 py-2 rounded-xl bg-claude-accent hover:bg-claude-accentHover text-white text-sm font-medium transition-colors disabled:opacity-50 active:scale-[0.98]"
-                >
-                  {coworkSandboxInstalling ? i18nService.t('coworkSandboxInstalling') : i18nService.t('coworkSandboxInstall')}
-                </button>
-              )}
-
-              {coworkSandboxDisabled && !coworkSandboxStatus?.supported && (
-                <div className="text-xs text-blue-500 dark:text-blue-400">
-                  {i18nService.t('coworkSandboxSelectionBlocked')}
-                </div>
-              )}
             </div>
+            {isOpenClawAgentEngine && (
+              <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+                <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {i18nService.t('coworkOpenClawInstallHint')}
+                </div>
+                <div className={`rounded-xl border px-4 py-3 text-sm ${openClawEngineStatus?.phase === 'error'
+                  ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300'
+                  : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      {resolveOpenClawStatusText(openClawEngineStatus)}
+                      {openClawProgressPercent !== null && (
+                        <span className="ml-2 text-xs opacity-80">{openClawProgressPercent}%</span>
+                      )}
+                    </div>
+                  </div>
+                  {openClawProgressPercent !== null && (
+                    <div className="mt-2 h-2 rounded-full bg-black/10 overflow-hidden">
+                      <div
+                        className="h-full bg-claude-accent transition-all"
+                        style={{ width: `${openClawProgressPercent}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         );
 
       case 'coworkMemory':
         return (
           <div className="space-y-6">
-            <div className="space-y-3 rounded-xl border px-4 py-4 border-claude-border">
-              <div className="text-sm font-medium text-claude-text">
+            {/* Section 1: Long-term Memory (MEMORY.md) */}
+            <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+              <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
                 {i18nService.t('coworkMemoryTitle')}
               </div>
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={coworkMemoryEnabled}
-                  onChange={(event) => setCoworkMemoryEnabled(event.target.checked)}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block text-sm text-claude-text">
-                    {i18nService.t('coworkMemoryEnabled')}
-                  </span>
-                  <span className="block text-xs text-claude-textSecondary">
-                    {i18nService.t('coworkMemoryEnabledHint')}
-                  </span>
-                  <span className="mt-1 block text-xs text-claude-textSecondary">
-                    {i18nService.t('coworkMemorySimpleHint')}
-                  </span>
+              {/* Memory toggle hidden – always enabled by default */}
+              <div className="mt-2 text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                <span className="font-medium">{i18nService.t('coworkMemoryFilePath')}:</span>{' '}
+                <span className="break-all font-mono opacity-80">
+                  {joinWorkspacePath(coworkConfig.workingDirectory, 'MEMORY.md')}
                 </span>
-              </label>
-              <label className={`flex items-start gap-3 ${coworkMemoryEnabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-                <input
-                  type="checkbox"
-                  checked={coworkMemoryLlmJudgeEnabled}
-                  onChange={(event) => setCoworkMemoryLlmJudgeEnabled(event.target.checked)}
-                  disabled={!coworkMemoryEnabled}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block text-sm text-claude-text">
-                    {i18nService.t('coworkMemoryLlmJudgeEnabled')}
-                  </span>
-                  <span className="block text-xs text-claude-textSecondary">
-                    {i18nService.t('coworkMemoryLlmJudgeEnabledHint')}
-                  </span>
-                </span>
-              </label>
+              </div>
             </div>
 
             <div className="space-y-4 rounded-xl border px-4 py-4 border-claude-border">
@@ -2287,8 +2502,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               </div>
 
               {coworkMemoryStats && (
-                <div className="text-xs text-claude-textSecondary">
-                  {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.created + coworkMemoryStats.stale} · ${i18nService.t('coworkMemoryActiveLabel')}: ${coworkMemoryStats.created} · ${i18nService.t('coworkMemoryInactiveLabel')}: ${coworkMemoryStats.stale}`}
+                <div className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  {`${i18nService.t('coworkMemoryTotalLabel')}: ${coworkMemoryStats.total}`}
                 </div>
               )}
 
@@ -2300,7 +2515,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 className="w-full rounded-lg border px-3 py-2 text-sm border-claude-border bg-claude-surface"
               />
 
-              <div className="max-h-[500px] overflow-auto rounded-lg border border-claude-border">
+              <div className="max-h-[500px] overflow-auto rounded-lg border dark:border-claude-darkBorder border-claude-border">
                 {coworkMemoryListLoading ? (
                   <div className="px-3 py-3 text-xs text-claude-textSecondary">
                     {i18nService.t('loading')}
@@ -2314,17 +2529,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     {coworkMemoryEntries.map((entry) => (
                       <div key={entry.id} className="px-3 py-3 text-xs hover:bg-claude-surfaceHover transition-colors">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1 space-y-1 min-w-0">
-                            <div className="font-medium text-claude-text break-words">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium dark:text-claude-darkText text-claude-text break-words">
                               {entry.text}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-claude-textSecondary">
-                              <span className="rounded-full border px-2 py-0.5 border-claude-border">
-                                {getMemoryStatusLabel(entry.status)}
-                              </span>
-                              <span>
-                                {`${i18nService.t('coworkMemoryUpdatedAt')}: ${formatMemoryUpdatedAt(entry.updatedAt)}`}
-                              </span>
                             </div>
                           </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
@@ -2464,7 +2671,217 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               </div>
 
-              {providerRequiresApiKey(activeProvider) && (
+              {/* MiniMax OAuth auth section */}
+              {activeProvider === 'minimax' && (
+                <div className="space-y-3">
+                  {/* Auth type tabs */}
+                  <div>
+                    <div className="flex rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border mb-3">
+                      <button
+                        type="button"
+                        onClick={() => setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'oauth' } }))}
+                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${providers.minimax.authType === 'oauth' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                      >
+                        {i18nService.t('minimaxOAuthTabOAuth')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'apikey' } }));
+                          setMinimaxOAuthPhase({ kind: 'idle' });
+                        }}
+                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${providers.minimax.authType !== 'oauth' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                      >
+                        {i18nService.t('minimaxOAuthTabApiKey')}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* API Key mode */}
+                  {providers.minimax.authType !== 'oauth' && (
+                    <div className="relative">
+                      <input
+                        type={showApiKey ? 'text' : 'password'}
+                        id="minimax-apiKey"
+                        value={providers.minimax.apiKey}
+                        onChange={(e) => handleProviderConfigChange('minimax', 'apiKey', e.target.value)}
+                        className="block w-full rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset dark:border-claude-darkBorder border-claude-border border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-xs"
+                        placeholder={i18nService.t('apiKeyPlaceholder')}
+                      />
+                      <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                        {providers.minimax.apiKey && (
+                          <button
+                            type="button"
+                            onClick={() => handleProviderConfigChange('minimax', 'apiKey', '')}
+                            className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                            title={i18nService.t('clear') || 'Clear'}
+                          >
+                            <XCircleIconSolid className="h-4 w-4" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                          className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
+                          title={showApiKey ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                        >
+                          {showApiKey ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* OAuth mode */}
+                  {providers.minimax.authType === 'oauth' && (
+                    <div className="space-y-2">
+                      {/* Already logged in */}
+                      {minimaxOAuthPhase.kind === 'idle' && providers.minimax.apiKey && (
+                        <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 space-y-2">
+                          <p className="text-xs text-green-600 dark:text-green-400 font-medium">
+                            {i18nService.t('minimaxOAuthLoggedIn')}
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthRelogin')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleMiniMaxOAuthLogout}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthLogout')}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Not logged in yet — show region selector + login button */}
+                      {minimaxOAuthPhase.kind === 'idle' && !providers.minimax.apiKey && (
+                        <div className="space-y-2">
+                          <div>
+                            <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
+                              {i18nService.t('minimaxOAuthRegionLabel')}
+                            </label>
+                            <div className="flex rounded-xl overflow-hidden border dark:border-claude-darkBorder border-claude-border">
+                              <button
+                                type="button"
+                                onClick={() => setMinimaxOAuthRegion('cn')}
+                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'cn' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                              >
+                                {i18nService.t('minimaxOAuthRegionCN')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMinimaxOAuthRegion('global')}
+                                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxOAuthRegion === 'global' ? 'bg-claude-accent text-white' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover'}`}
+                              >
+                                {i18nService.t('minimaxOAuthRegionGlobal')}
+                              </button>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
+                            className="w-full py-2 text-xs font-medium rounded-xl bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                          >
+                            {i18nService.t('minimaxOAuthLogin')}
+                          </button>
+                          <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            {i18nService.t('minimaxOAuthHint')}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Requesting code */}
+                      {minimaxOAuthPhase.kind === 'requesting_code' && (
+                        <div className="p-3 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border">
+                          <p className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            {i18nService.t('minimaxOAuthLoggingIn')}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Pending — show user code */}
+                      {minimaxOAuthPhase.kind === 'pending' && (
+                        <div className="p-3 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border dark:border-claude-darkBorder border-claude-border space-y-2">
+                          <p className="text-xs dark:text-claude-darkText text-claude-text font-medium">
+                            {i18nService.t('minimaxOAuthOpenBrowserHint')}
+                          </p>
+                          <div>
+                            <span className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                              {i18nService.t('minimaxOAuthUserCode')}:&nbsp;
+                            </span>
+                            <code className="text-xs font-mono text-claude-accent">
+                              {minimaxOAuthPhase.userCode}
+                            </code>
+                          </div>
+                          <a
+                            href={minimaxOAuthPhase.verificationUri}
+                            onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(minimaxOAuthPhase.verificationUri); }}
+                            className="block text-[11px] text-claude-accent underline truncate"
+                          >
+                            {minimaxOAuthPhase.verificationUri}
+                          </a>
+                          <p className="text-[11px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                            {i18nService.t('minimaxOAuthStatusPending')}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleCancelMiniMaxLogin}
+                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                          >
+                            {i18nService.t('minimaxOAuthCancel')}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Success */}
+                      {minimaxOAuthPhase.kind === 'success' && (
+                        <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20">
+                          <p className="text-xs text-green-600 dark:text-green-400 font-medium">
+                            {i18nService.t('minimaxOAuthStatusSuccess')}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Error */}
+                      {minimaxOAuthPhase.kind === 'error' && (
+                        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 space-y-2">
+                          <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                            {i18nService.t('minimaxOAuthStatusError')}
+                          </p>
+                          <p className="text-[11px] text-red-600/80 dark:text-red-400/80 break-words">
+                            {minimaxOAuthPhase.message}
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleMiniMaxDeviceLogin(minimaxOAuthRegion)}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthRelogin')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMinimaxOAuthPhase({ kind: 'idle' })}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
+                            >
+                              {i18nService.t('minimaxOAuthCancel')}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Standard API key section for non-MiniMax providers */}
+              {providerRequiresApiKey(activeProvider) && activeProvider !== 'minimax' && (
                 <div>
                   <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium text-claude-text mb-1">
                     {i18nService.t('apiKey')}
@@ -2502,6 +2919,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 </div>
               )}
 
+              {!(activeProvider === 'minimax' && providers.minimax.authType === 'oauth') && (
               <div>
                 <label htmlFor={`${activeProvider}-baseUrl`} className="block text-xs font-medium text-claude-text mb-1">
                   {i18nService.t('baseUrl')}
@@ -2594,9 +3012,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   </div>
                 )}
               </div>
+              )}
 
               {/* API 格式选择器 */}
-              {shouldShowApiFormatSelector(activeProvider) && (
+              {shouldShowApiFormatSelector(activeProvider) && !(activeProvider === 'minimax' && providers.minimax.authType === 'oauth') && (
                 <div>
                   <label htmlFor={`${activeProvider}-apiFormat`} className="block text-xs font-medium text-claude-text mb-1">
                     {i18nService.t('apiFormat')}
@@ -2748,6 +3167,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
               )}
 
               {/* 测试连接按钮 */}
+              {!(activeProvider === 'minimax' && providers.minimax.authType === 'oauth') && (
               <div className="flex items-center space-x-3">
                 <button
                   type="button"
@@ -2759,6 +3179,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   {isTesting ? i18nService.t('testing') : i18nService.t('testConnection')}
                 </button>
               </div>
+              )}
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
@@ -2777,18 +3198,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
 
                 {/* Models List */}
                 <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                  {providers[activeProvider].models?.map(model => (
+                  {(providers[activeProvider].models ?? []).map(model => (
                     <div
                       key={model.id}
                       className="bg-claude-surface/50 p-2 rounded-xl border-claude-border border transition-colors hover:border-claude-accent group"
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-1.5">
-                          <div className="w-1.5 h-1.5 rounded-full bg-green-400"></div>
-                          <span className="text-claude-text font-medium text-[11px]">{model.name}</span>
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <div className="w-1.5 h-1.5 shrink-0 rounded-full bg-green-400"></div>
+                          <div className="min-w-0">
+                            <div className="dark:text-claude-darkText text-claude-text font-medium text-[11px] truncate">{model.name}</div>
+                            <div className="text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary truncate">{model.id}</div>
+                          </div>
                         </div>
-                        <div className="flex items-center space-x-1">
-                          <span className="text-[10px] px-1.5 py-0.5 bg-claude-surfaceHover rounded-md text-claude-textSecondary">{model.id}</span>
+                        <div className="flex items-center shrink-0 space-x-1">
                           {model.supportsImage && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-claude-accent/10 text-claude-accent">
                               {i18nService.t('imageInput')}
@@ -2828,6 +3251,55 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        );
+
+      case 'coworkAgent':
+        return (
+          <div className="space-y-6">
+            {/* Agent Settings (IDENTITY.md + SOUL.md) */}
+            <div className="space-y-4 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+              <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkBootstrapAgentSectionTitle')}
+              </div>
+              {[
+                { filename: 'IDENTITY.md', titleKey: 'coworkBootstrapIdentityTitle', hintKey: 'coworkBootstrapIdentityHint', value: bootstrapIdentity, setter: setBootstrapIdentity },
+                { filename: 'SOUL.md', titleKey: 'coworkBootstrapSoulTitle', hintKey: 'coworkBootstrapSoulHint', value: bootstrapSoul, setter: setBootstrapSoul },
+              ].map(({ filename, titleKey, hintKey, value, setter }) => (
+                <div key={filename} className="space-y-2">
+                  <div className="text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t(titleKey)}
+                    <span className="ml-1.5 font-normal opacity-60">
+                      （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, filename)}</span>）
+                    </span>
+                  </div>
+                  <textarea
+                    value={value}
+                    onChange={(e) => setter(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                    placeholder={i18nService.t(hintKey)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* User Profile (USER.md) */}
+            <div className="space-y-3 rounded-xl border px-4 py-4 dark:border-claude-darkBorder border-claude-border">
+              <div className="text-sm font-medium dark:text-claude-darkText text-claude-text">
+                {i18nService.t('coworkBootstrapUserTitle')}
+                <span className="ml-1.5 text-xs font-normal opacity-60 dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                  （{i18nService.t('coworkBootstrapStoragePath')}：<span className="font-mono">{joinWorkspacePath(coworkConfig.workingDirectory, 'USER.md')}</span>）
+                </span>
+              </div>
+              <textarea
+                value={bootstrapUser}
+                onChange={(e) => setBootstrapUser(e.target.value)}
+                rows={3}
+                className="w-full rounded-lg border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurface bg-claude-surface dark:text-claude-darkText text-claude-text resize-y"
+                placeholder={i18nService.t('coworkBootstrapUserHint')}
+              />
             </div>
           </div>
         );
@@ -3047,7 +3519,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   return (
     <div
       className="fixed inset-0 z-50 modal-backdrop flex items-center justify-center"
-      onClick={onClose}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
         className="relative flex w-[900px] h-[80vh] rounded-2xl border-claude-border border shadow-modal overflow-hidden modal-content"

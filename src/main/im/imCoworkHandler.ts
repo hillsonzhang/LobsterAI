@@ -1,23 +1,36 @@
 /**
  * IM Cowork Handler
- * Adapter that enables IM (DingTalk/Feishu/Telegram) to use CoworkRunner for tool-enabled AI execution
+ * Adapter that enables IM (DingTalk/Feishu/Telegram) to use CoworkRuntime for tool-enabled AI execution
  */
 
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import type { CoworkRunner, PermissionRequest } from '../libs/coworkRunner';
+import type { CoworkRuntime, PermissionRequest } from '../libs/agentEngine/types';
 import type { CoworkStore, CoworkMessage } from '../coworkStore';
 import type { IMStore } from './imStore';
-import type { IMMessage, IMPlatform, IMMediaAttachment } from './types';
+import type { IMMessage, Platform, IMMediaAttachment, IMSessionMapping } from './types';
 import { buildIMMediaInstruction } from './imMediaInstruction';
+import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY } from './imReplyGuard';
+import {
+  isReminderSystemTurn,
+  type IMScheduledTaskCreationResult,
+  type IMScheduledTaskRequestDetector,
+  type ParsedIMScheduledTaskRequest,
+} from './imScheduledTaskHandler';
+import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
+import { t } from '../i18n';
 
 interface MessageAccumulator {
   messages: CoworkMessage[];
-  resolve: (text: string) => void;
-  reject: (error: Error) => void;
+  resolve?: (text: string) => void;
+  reject?: (error: Error) => void;
   timeoutId?: NodeJS.Timeout;
+  backgroundDelivery?: {
+    conversationId: string;
+    platform: Platform;
+  };
 }
 
 interface PendingIMPermission {
@@ -25,7 +38,7 @@ interface PendingIMPermission {
   sessionId: string;
   request: PermissionRequest;
   conversationId: string;
-  platform: IMPlatform;
+  platform: Platform;
   createdAt: number;
   timeoutId?: NodeJS.Timeout;
 }
@@ -37,49 +50,104 @@ const IM_DENY_RESPONSE_RE = /^(拒绝|不同意|no|n)$/i;
 const IM_ALLOW_OPTION_LABEL = '允许本次操作';
 
 export interface IMCoworkHandlerOptions {
-  coworkRunner: CoworkRunner;
+  coworkRuntime: CoworkRuntime;
   coworkStore: CoworkStore;
   imStore: IMStore;
   getSkillsPrompt?: () => Promise<string | null>;
+  detectScheduledTaskRequest?: IMScheduledTaskRequestDetector;
+  createScheduledTask?: (params: {
+    sessionId: string;
+    message: IMMessage;
+    request: ParsedIMScheduledTaskRequest;
+  }) => Promise<IMScheduledTaskCreationResult>;
+  sendAsyncReply?: (platform: Platform, conversationId: string, text: string) => Promise<boolean>;
 }
 
 export class IMCoworkHandler extends EventEmitter {
-  private coworkRunner: CoworkRunner;
+  private coworkRuntime: CoworkRuntime;
   private coworkStore: CoworkStore;
   private imStore: IMStore;
   private getSkillsPrompt?: () => Promise<string | null>;
+  private detectScheduledTaskRequest?: IMScheduledTaskRequestDetector;
+  private createScheduledTask?: (params: {
+    sessionId: string;
+    message: IMMessage;
+    request: ParsedIMScheduledTaskRequest;
+  }) => Promise<IMScheduledTaskCreationResult>;
+  private sendAsyncReply?: (platform: Platform, conversationId: string, text: string) => Promise<boolean>;
 
   // Track active sessions' message accumulation
   private messageAccumulators: Map<string, MessageAccumulator> = new Map();
 
   // Track which sessions are created by IM (to filter events)
   private imSessionIds: Set<string> = new Set();
-  private sessionConversationMap: Map<string, { conversationId: string; platform: IMPlatform }> = new Map();
+  private sessionConversationMap: Map<string, { conversationId: string; platform: Platform }> = new Map();
   private pendingPermissionByConversation: Map<string, PendingIMPermission> = new Map();
+  private readonly onMessage = this.handleMessage.bind(this);
+  private readonly onMessageUpdate = this.handleMessageUpdate.bind(this);
+  private readonly onPermissionRequest = this.handlePermissionRequest.bind(this);
+  private readonly onComplete = this.handleComplete.bind(this);
+  private readonly onError = this.handleError.bind(this);
 
   constructor(options: IMCoworkHandlerOptions) {
     super();
-    this.coworkRunner = options.coworkRunner;
+    this.coworkRuntime = options.coworkRuntime;
     this.coworkStore = options.coworkStore;
     this.imStore = options.imStore;
     this.getSkillsPrompt = options.getSkillsPrompt;
+    this.detectScheduledTaskRequest = options.detectScheduledTaskRequest;
+    this.createScheduledTask = options.createScheduledTask;
+    this.sendAsyncReply = options.sendAsyncReply;
 
+    this.initializeMappedSessions();
     this.setupEventListeners();
   }
 
-  /**
-   * Set up event listeners for CoworkRunner
-   */
-  private setupEventListeners(): void {
-    this.coworkRunner.on('message', this.handleMessage.bind(this));
-    this.coworkRunner.on('messageUpdate', this.handleMessageUpdate.bind(this));
-    this.coworkRunner.on('permissionRequest', this.handlePermissionRequest.bind(this));
-    this.coworkRunner.on('complete', this.handleComplete.bind(this));
-    this.coworkRunner.on('error', this.handleError.bind(this));
+  private initializeMappedSessions(): void {
+    for (const mapping of this.imStore.listSessionMappings()) {
+      const session = this.coworkStore.getSession(mapping.coworkSessionId);
+      if (!session) {
+        continue;
+      }
+      this.trackSessionMapping(mapping);
+    }
+  }
+
+  private trackSessionMapping(mapping: IMSessionMapping): void {
+    this.imSessionIds.add(mapping.coworkSessionId);
+    this.sessionConversationMap.set(mapping.coworkSessionId, {
+      conversationId: mapping.imConversationId,
+      platform: mapping.platform,
+    });
+  }
+
+  private ensureTrackedSession(sessionId: string): boolean {
+    if (this.imSessionIds.has(sessionId)) {
+      return true;
+    }
+
+    const mapping = this.imStore.getSessionMappingByCoworkSessionId(sessionId);
+    if (!mapping) {
+      return false;
+    }
+
+    this.trackSessionMapping(mapping);
+    return true;
   }
 
   /**
-   * Process an incoming IM message using CoworkRunner
+   * Set up event listeners for CoworkRuntime
+   */
+  private setupEventListeners(): void {
+    this.coworkRuntime.on('message', this.onMessage);
+    this.coworkRuntime.on('messageUpdate', this.onMessageUpdate);
+    this.coworkRuntime.on('permissionRequest', this.onPermissionRequest);
+    this.coworkRuntime.on('complete', this.onComplete);
+    this.coworkRuntime.on('error', this.onError);
+  }
+
+  /**
+   * Process an incoming IM message using CoworkRuntime
    */
   async processMessage(message: IMMessage): Promise<string> {
     const pendingPermissionReply = await this.handlePendingPermissionReply(message);
@@ -120,11 +188,24 @@ export class IMCoworkHandler extends EventEmitter {
       platform: message.platform,
     });
 
+    const formattedContent = this.formatMessageWithMedia(message);
+    const directScheduledTaskRequest = this.createScheduledTask && this.detectScheduledTaskRequest
+      ? await this.detectScheduledTaskRequest(message)
+      : null;
+
+    if (directScheduledTaskRequest && this.createScheduledTask) {
+      return this.handleDirectScheduledTaskRequest(
+        coworkSessionId,
+        message,
+        formattedContent,
+        directScheduledTaskRequest
+      );
+    }
+
     const responsePromise = this.createAccumulatorPromise(coworkSessionId);
 
     // Start or continue session
-    const isActive = this.coworkRunner.isSessionActive(coworkSessionId);
-    const formattedContent = this.formatMessageWithMedia(message);
+    const isActive = this.coworkRuntime.isSessionActive(coworkSessionId);
     const systemPrompt = await this.buildSystemPromptWithSkills();
     const hasAvailableSkills = systemPrompt.includes('<available_skills>');
     const session = this.coworkStore.getSession(coworkSessionId);
@@ -164,10 +245,10 @@ export class IMCoworkHandler extends EventEmitter {
     };
 
     if (isActive) {
-      this.coworkRunner.continueSession(coworkSessionId, formattedContent, { systemPrompt })
+      this.coworkRuntime.continueSession(coworkSessionId, formattedContent, { systemPrompt })
         .catch(onSessionStartError);
     } else {
-      this.coworkRunner.startSession(coworkSessionId, formattedContent, {
+      this.coworkRuntime.startSession(coworkSessionId, formattedContent, {
         workspaceRoot: session?.cwd,
         confirmationMode: 'text',
         systemPrompt,
@@ -182,7 +263,7 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private async getOrCreateCoworkSession(
     imConversationId: string,
-    platform: IMPlatform,
+    platform: Platform,
     forceNewSession: boolean = false,
     senderId?: string,
     message?: IMMessage
@@ -194,7 +275,7 @@ export class IMCoworkHandler extends EventEmitter {
         this.imSessionIds.delete(stale.coworkSessionId);
         this.sessionConversationMap.delete(stale.coworkSessionId);
         this.clearPendingPermissionsBySessionId(stale.coworkSessionId);
-        this.coworkRunner.stopSession(stale.coworkSessionId);
+        this.coworkRuntime.stopSession(stale.coworkSessionId);
       }
     }
 
@@ -210,14 +291,10 @@ export class IMCoworkHandler extends EventEmitter {
         this.imSessionIds.delete(existing.coworkSessionId);
         this.sessionConversationMap.delete(existing.coworkSessionId);
         this.clearPendingPermissionsBySessionId(existing.coworkSessionId);
-        this.coworkRunner.stopSession(existing.coworkSessionId);
+        this.coworkRuntime.stopSession(existing.coworkSessionId);
       } else {
         this.imStore.updateSessionLastActive(imConversationId, platform);
-        this.imSessionIds.add(existing.coworkSessionId);
-        this.sessionConversationMap.set(existing.coworkSessionId, {
-          conversationId: imConversationId,
-          platform,
-        });
+        this.trackSessionMapping(existing);
         return existing.coworkSessionId;
       }
     }
@@ -228,7 +305,7 @@ export class IMCoworkHandler extends EventEmitter {
 
   private async createCoworkSessionForConversation(
     imConversationId: string,
-    platform: IMPlatform,
+    platform: Platform,
     senderId?: string,
     message?: IMMessage
   ): Promise<string> {
@@ -246,20 +323,22 @@ export class IMCoworkHandler extends EventEmitter {
       throw new Error(`IM 工作目录不存在或无效: ${resolvedWorkspaceRoot}`);
     }
 
+    // Resolve the agent bound to this platform
+    const imSettings = this.imStore.getIMSettings();
+    const agentId = imSettings.platformAgentBindings?.[platform] || 'main';
+
     const session = this.coworkStore.createSession(
       title,
       resolvedWorkspaceRoot,
       systemPrompt,
-      'local' // IM always uses local mode
+      config.executionMode || 'auto',
+      [],
+      agentId
     );
 
     // Save mapping
-    this.imStore.createSessionMapping(imConversationId, platform, session.id);
-    this.imSessionIds.add(session.id);
-    this.sessionConversationMap.set(session.id, {
-      conversationId: imConversationId,
-      platform,
-    });
+    const mapping = this.imStore.createSessionMapping(imConversationId, platform, session.id);
+    this.trackSessionMapping(mapping);
 
     return session.id;
   }
@@ -275,23 +354,23 @@ export class IMCoworkHandler extends EventEmitter {
    * Other platforms use the original "IM-{platform}-{timestamp}" style.
    */
   private buildSessionTitle(
-    platform: IMPlatform,
+    platform: Platform,
     _imConversationId: string,
     senderId?: string,
     message?: IMMessage
   ): string {
     if (platform === 'nim') {
+      const nimLabel = t('channelPrefixNim');
       if (message?.chatSubType === 'qchat') {
         const channelLabel = message.groupName || _imConversationId;
-        return `云信-圈组-${channelLabel}`;
+        return `${nimLabel}-${t('nimQChat')}-${channelLabel}`;
       }
       if (message?.chatType === 'group') {
         const groupLabel = message.groupName || senderId || _imConversationId;
-        return `云信-群聊-${groupLabel}`;
+        return `${nimLabel}-${t('nimGroup')}-${groupLabel}`;
       }
-      // P2P direct message
       const peerLabel = message?.senderName || senderId || _imConversationId;
-      return `云信-P2P-${peerLabel}`;
+      return `${nimLabel}-P2P-${peerLabel}`;
     }
     return `IM-${platform}-${Date.now()}`;
   }
@@ -300,29 +379,129 @@ export class IMCoworkHandler extends EventEmitter {
     const config = this.coworkStore.getConfig();
     const imSettings = this.imStore.getIMSettings();
     const systemPrompt = config.systemPrompt || '';
+    const scheduledTaskPrompt = buildScheduledTaskEnginePrompt(config.agentEngine);
 
     // Build media instruction for IM media sending capability
     const mediaInstruction = buildIMMediaInstruction(imSettings);
 
-    let combinedPrompt = systemPrompt;
+    const sections: string[] = [];
+    if (systemPrompt) {
+      sections.push(systemPrompt);
+    }
 
     if (imSettings.skillsEnabled && this.getSkillsPrompt) {
       const skillsPrompt = await this.getSkillsPrompt();
       if (skillsPrompt) {
-        combinedPrompt = combinedPrompt
-          ? `${skillsPrompt}\n\n${combinedPrompt}`
-          : skillsPrompt;
+        sections.push(skillsPrompt);
       }
+    }
+
+    if (scheduledTaskPrompt) {
+      sections.push(scheduledTaskPrompt);
     }
 
     // Append media instruction at the end so it's always present
     if (mediaInstruction) {
-      combinedPrompt = combinedPrompt
-        ? `${combinedPrompt}\n\n${mediaInstruction}`
-        : mediaInstruction;
+      sections.push(mediaInstruction);
     }
 
-    return combinedPrompt;
+    return sections.join('\n\n');
+  }
+
+  private async handleDirectScheduledTaskRequest(
+    sessionId: string,
+    message: IMMessage,
+    formattedContent: string,
+    request: ParsedIMScheduledTaskRequest,
+  ): Promise<string> {
+    const toolUseId = `cron:${Date.now()}`;
+
+    this.coworkStore.addMessage(sessionId, {
+      type: 'user',
+      content: formattedContent,
+      metadata: {},
+    });
+    this.coworkStore.addMessage(sessionId, {
+      type: 'tool_use',
+      content: 'Using tool: cron',
+      metadata: {
+        toolName: 'cron',
+        toolUseId,
+        toolInput: {
+          action: 'add',
+          job: {
+            name: request.taskName,
+            schedule: {
+              kind: 'at',
+              at: request.scheduleAt,
+            },
+            payload: {
+              kind: 'systemEvent',
+              text: request.payloadText,
+            },
+            sessionTarget: 'main',
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    try {
+      const created = await this.createScheduledTask!({
+        sessionId,
+        message,
+        request,
+      });
+      const toolResultText = JSON.stringify(created);
+      this.coworkStore.addMessage(sessionId, {
+        type: 'tool_result',
+        content: toolResultText,
+        metadata: {
+          toolUseId,
+          toolResult: toolResultText,
+          isError: false,
+        },
+      });
+      this.coworkStore.addMessage(sessionId, {
+        type: 'assistant',
+        content: request.confirmationText,
+        metadata: {},
+      });
+      console.log('[IMCoworkHandler] Created IM scheduled task via cron.add', JSON.stringify({
+        sessionId,
+        platform: message.platform,
+        conversationId: message.conversationId,
+        taskId: created.id,
+        taskName: created.name,
+        scheduleAt: created.scheduleAt,
+      }));
+      return request.confirmationText;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.coworkStore.addMessage(sessionId, {
+        type: 'tool_result',
+        content: errorMessage,
+        metadata: {
+          toolUseId,
+          toolResult: errorMessage,
+          error: errorMessage,
+          isError: true,
+        },
+      });
+      const reply = `定时任务创建失败：${errorMessage}`;
+      this.coworkStore.addMessage(sessionId, {
+        type: 'assistant',
+        content: reply,
+        metadata: {},
+      });
+      console.warn('[IMCoworkHandler] Failed to create IM scheduled task via cron.add', JSON.stringify({
+        sessionId,
+        platform: message.platform,
+        conversationId: message.conversationId,
+        error: errorMessage,
+      }));
+      return reply;
+    }
   }
 
   private isSessionNotFoundError(error: unknown): boolean {
@@ -359,13 +538,16 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   /**
-   * Handle message event from CoworkRunner
+   * Handle message event from CoworkRuntime
    */
   private handleMessage(sessionId: string, message: CoworkMessage): void {
     // Only process messages from IM sessions
-    if (!this.imSessionIds.has(sessionId)) return;
+    const tracked = this.ensureTrackedSession(sessionId);
+    console.log('[IMCoworkHandler:handleMessage] sessionId:', sessionId, 'tracked:', tracked, 'messageType:', message.type);
+    if (!tracked) return;
 
-    const accumulator = this.messageAccumulators.get(sessionId);
+    const accumulator = this.messageAccumulators.get(sessionId) ?? this.ensureBackgroundAccumulator(sessionId);
+    console.log('[IMCoworkHandler:handleMessage] accumulator exists:', !!accumulator, 'backgroundDelivery:', !!(accumulator as any)?.backgroundDelivery);
     if (accumulator) {
       accumulator.messages.push(message);
     }
@@ -376,7 +558,7 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleMessageUpdate(sessionId: string, messageId: string, content: string): void {
     // Only process updates from IM sessions
-    if (!this.imSessionIds.has(sessionId)) return;
+    if (!this.ensureTrackedSession(sessionId)) return;
 
     const accumulator = this.messageAccumulators.get(sessionId);
     if (accumulator) {
@@ -388,7 +570,7 @@ export class IMCoworkHandler extends EventEmitter {
     }
   }
 
-  private createConversationKey(conversationId: string, platform: IMPlatform): string {
+  private createConversationKey(conversationId: string, platform: Platform): string {
     return `${platform}:${conversationId}`;
   }
 
@@ -400,18 +582,18 @@ export class IMCoworkHandler extends EventEmitter {
           clearTimeout(existingAccumulator.timeoutId);
         }
         this.messageAccumulators.delete(sessionId);
-        existingAccumulator.reject(new Error('Replaced by a newer IM request'));
+        existingAccumulator.reject?.(new Error('Replaced by a newer IM request'));
       }
 
       const timeoutId = setTimeout(() => {
         const accumulator = this.messageAccumulators.get(sessionId);
         if (accumulator && accumulator.timeoutId === timeoutId) {
-          const partialReply = this.formatReply(accumulator.messages);
+          const partialReply = this.formatReply(sessionId, accumulator.messages);
           this.cleanupAccumulator(sessionId);
           if (partialReply && partialReply !== '处理完成，但没有生成回复。') {
-            accumulator.resolve(partialReply + '\n\n[处理超时，以上为部分结果]');
+            accumulator.resolve?.(partialReply + '\n\n[处理超时，以上为部分结果]');
           } else {
-            accumulator.reject(new Error('处理超时，请稍后重试'));
+            accumulator.reject?.(new Error('处理超时，请稍后重试'));
           }
         }
       }, ACCUMULATOR_TIMEOUT_MS);
@@ -426,11 +608,42 @@ export class IMCoworkHandler extends EventEmitter {
     });
   }
 
+  private ensureBackgroundAccumulator(sessionId: string): MessageAccumulator | null {
+    const conversation = this.sessionConversationMap.get(sessionId);
+    if (!conversation) {
+      return null;
+    }
+
+    const existing = this.messageAccumulators.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+
+    const timeoutId = setTimeout(() => {
+      const accumulator = this.messageAccumulators.get(sessionId);
+      if (!accumulator?.backgroundDelivery || accumulator.timeoutId !== timeoutId) {
+        return;
+      }
+      this.cleanupAccumulator(sessionId);
+    }, ACCUMULATOR_TIMEOUT_MS);
+
+    const nextAccumulator: MessageAccumulator = {
+      messages: [],
+      timeoutId,
+      backgroundDelivery: {
+        conversationId: conversation.conversationId,
+        platform: conversation.platform,
+      },
+    };
+    this.messageAccumulators.set(sessionId, nextAccumulator);
+    return nextAccumulator;
+  }
+
   private rejectAccumulator(sessionId: string, error: Error): void {
     const accumulator = this.messageAccumulators.get(sessionId);
     if (!accumulator) return;
     this.cleanupAccumulator(sessionId);
-    accumulator.reject(error);
+    accumulator.reject?.(error);
   }
 
   private clearPendingPermissionByKey(key: string): PendingIMPermission | null {
@@ -524,14 +737,14 @@ export class IMCoworkHandler extends EventEmitter {
       return '当前有待确认操作，请回复“允许”或“拒绝”（60 秒内）。';
     }
 
-    if (!this.coworkRunner.isSessionActive(pending.sessionId)) {
+    if (!this.coworkRuntime.isSessionActive(pending.sessionId)) {
       this.clearPendingPermissionByKey(key);
       return '该确认请求已过期，请重新发送任务。';
     }
 
     if (IM_DENY_RESPONSE_RE.test(normalizedReply)) {
       this.clearPendingPermissionByKey(key);
-      this.coworkRunner.respondToPermission(pending.request.requestId, {
+      this.coworkRuntime.respondToPermission(pending.request.requestId, {
         behavior: 'deny',
         message: 'Operation denied by IM user confirmation.',
       });
@@ -544,7 +757,7 @@ export class IMCoworkHandler extends EventEmitter {
 
     this.clearPendingPermissionByKey(key);
     const responsePromise = this.createAccumulatorPromise(pending.sessionId);
-    this.coworkRunner.respondToPermission(
+    this.coworkRuntime.respondToPermission(
       pending.request.requestId,
       this.buildAllowPermissionResult(pending.request)
     );
@@ -556,10 +769,10 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handlePermissionRequest(sessionId: string, request: PermissionRequest): void {
     // Only process permission requests from IM sessions
-    if (!this.imSessionIds.has(sessionId)) return;
+    if (!this.ensureTrackedSession(sessionId)) return;
     const conversation = this.sessionConversationMap.get(sessionId);
     if (!conversation) {
-      this.coworkRunner.respondToPermission(request.requestId, {
+      this.coworkRuntime.respondToPermission(request.requestId, {
         behavior: 'deny',
         message: 'IM session mapping missing for permission request.',
       });
@@ -569,7 +782,7 @@ export class IMCoworkHandler extends EventEmitter {
     const key = this.createConversationKey(conversation.conversationId, conversation.platform);
     const existingPending = this.clearPendingPermissionByKey(key);
     if (existingPending) {
-      this.coworkRunner.respondToPermission(existingPending.request.requestId, {
+      this.coworkRuntime.respondToPermission(existingPending.request.requestId, {
         behavior: 'deny',
         message: 'Superseded by a newer permission request.',
       });
@@ -581,7 +794,7 @@ export class IMCoworkHandler extends EventEmitter {
         return;
       }
       this.clearPendingPermissionByKey(key);
-      this.coworkRunner.respondToPermission(request.requestId, {
+      this.coworkRuntime.respondToPermission(request.requestId, {
         behavior: 'deny',
         message: 'Permission request timed out after 60s',
       });
@@ -601,7 +814,7 @@ export class IMCoworkHandler extends EventEmitter {
     if (accumulator) {
       const confirmationPrompt = this.buildIMPermissionPrompt(request);
       this.cleanupAccumulator(sessionId);
-      accumulator.resolve(confirmationPrompt);
+      accumulator.resolve?.(confirmationPrompt);
     }
   }
 
@@ -610,24 +823,69 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleComplete(sessionId: string): void {
     // Only process complete events from IM sessions
-    if (!this.imSessionIds.has(sessionId)) return;
+    const tracked = this.ensureTrackedSession(sessionId);
+    console.log('[IMCoworkHandler:handleComplete] sessionId:', sessionId, 'tracked:', tracked, 'hasAccumulator:', this.messageAccumulators.has(sessionId));
+    if (!tracked) return;
 
     this.clearPendingPermissionsBySessionId(sessionId);
     const accumulator = this.messageAccumulators.get(sessionId);
-    if (accumulator) {
-      const replyText = this.formatReply(accumulator.messages);
-
-      // 打印完整的输出消息日志
-      console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
-        sessionId,
-        messageCount: accumulator.messages.length,
-        replyLength: replyText.length,
-        reply: replyText,
-      }, null, 2));
-
-      this.cleanupAccumulator(sessionId);
-      accumulator.resolve(replyText);
+    if (!accumulator) {
+      return;
     }
+
+    // Use reconciled messages from the store (authoritative after reconcileWithHistory)
+    // instead of accumulator messages which may be stale streaming snapshots.
+    // Fall back to accumulator messages if the store has none (e.g. timeout path).
+    const session = this.coworkStore.getSession(sessionId);
+    const storeMessages = session?.messages ?? [];
+    const messages = storeMessages.length > 0 ? storeMessages : accumulator.messages;
+
+    // For cron-triggered background deliveries (scheduled task executions),
+    // skip the reminder guard — the assistant text IS the scheduled reminder
+    // itself, not a promise to create one.
+    const replyText = accumulator.backgroundDelivery
+      ? this.formatReplyRaw(messages)
+      : this.formatReply(sessionId, messages);
+
+    console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
+      sessionId,
+      messageCount: messages.length,
+      replyLength: replyText.length,
+      reply: replyText,
+      backgroundDelivery: accumulator.backgroundDelivery ?? null,
+      usedStoreMessages: storeMessages.length > 0,
+    }, null, 2));
+
+    this.cleanupAccumulator(sessionId);
+
+    if (accumulator.backgroundDelivery) {
+      if (!this.sendAsyncReply || !replyText || replyText === '处理完成，但没有生成回复。') {
+        console.warn('[IMCoworkHandler] cannot send async IM reminder reply', replyText);
+        return;
+      }
+      if (!isReminderSystemTurn(messages)) {
+        console.log('[IMCoworkHandler] not a reminder system turn, skipping async reply');
+        return;
+      }
+      void this.sendAsyncReply(
+        accumulator.backgroundDelivery.platform,
+        accumulator.backgroundDelivery.conversationId,
+        replyText,
+      ).then((sent) => {
+        if (!sent) {
+          console.warn('[IMCoworkHandler] Failed to relay async IM reminder reply', JSON.stringify({
+            sessionId,
+            platform: accumulator.backgroundDelivery?.platform,
+            conversationId: accumulator.backgroundDelivery?.conversationId,
+          }));
+        }
+      }).catch((error) => {
+        console.error('[IMCoworkHandler] Async IM reminder reply failed:', error);
+      });
+      return;
+    }
+
+    accumulator.resolve?.(replyText);
   }
 
   /**
@@ -635,13 +893,13 @@ export class IMCoworkHandler extends EventEmitter {
    */
   private handleError(sessionId: string, error: string): void {
     // Only process error events from IM sessions
-    if (!this.imSessionIds.has(sessionId)) return;
+    if (!this.ensureTrackedSession(sessionId)) return;
 
     this.clearPendingPermissionsBySessionId(sessionId);
     const accumulator = this.messageAccumulators.get(sessionId);
     if (accumulator) {
       this.cleanupAccumulator(sessionId);
-      accumulator.reject(new Error(error));
+      accumulator.reject?.(new Error(error));
     }
   }
 
@@ -657,22 +915,38 @@ export class IMCoworkHandler extends EventEmitter {
   }
 
   /**
-   * Format accumulated messages into a reply string
+   * Extract raw assistant text from accumulated messages, bypassing the
+   * reminder-commitment guard.  Used for cron-triggered background deliveries
+   * where the reply IS the scheduled reminder, not a promise to create one.
    */
-  private formatReply(messages: CoworkMessage[]): string {
+  private formatReplyRaw(messages: CoworkMessage[]): string {
     const parts: string[] = [];
-
-    for (const msg of messages) {
-      // Skip user messages (they're the input)
-      if (msg.type === 'user') continue;
-
-      // Only include assistant messages in reply (skip thinking messages)
-      if (msg.type === 'assistant' && msg.content && !msg.metadata?.isThinking) {
-        parts.push(msg.content);
+    for (const message of messages) {
+      if (message.type === 'assistant' && message.content && !message.metadata?.isThinking) {
+        const text = message.content.trim();
+        if (text) parts.push(text);
       }
     }
+    return parts.join('\n\n') || DEFAULT_IM_EMPTY_REPLY;
+  }
 
-    return parts.join('\n\n') || '处理完成，但没有生成回复。';
+  /**
+   * Format accumulated messages into a reply string
+   */
+  private formatReply(sessionId: string, messages: CoworkMessage[]): string {
+    const analysis = analyzeIMReply(messages);
+
+    if (analysis.guardApplied) {
+      console.warn('[IMCoworkHandler] Guarded misleading reminder reply without successful cron.add', JSON.stringify({
+        sessionId,
+        attemptedCronAdds: analysis.attemptedCronAdds,
+        successfulCronAdds: analysis.successfulCronAdds,
+        lastCronAddError: analysis.lastCronAddError,
+        assistantText: analysis.assistantText,
+      }));
+    }
+
+    return analysis.text;
   }
 
   /**
@@ -680,7 +954,11 @@ export class IMCoworkHandler extends EventEmitter {
    * Appends media metadata to content so AI can access the files
    */
   private formatMessageWithMedia(message: IMMessage): string {
-    let content = message.content;
+    // POPO's moltbot-popo plugin converts newlines to HTML break tags (<br />),
+    // causing raw <br /> to appear in the AI conversation instead of actual line breaks.
+    let content = message.platform === 'popo'
+      ? message.content.replace(/<br\s*\/?>/gi, '\n')
+      : message.content;
 
     if (message.attachments && message.attachments.length > 0) {
       const mediaInfo = message.attachments.map((att: IMMediaAttachment) => {
@@ -724,10 +1002,10 @@ export class IMCoworkHandler extends EventEmitter {
     this.pendingPermissionByConversation.clear();
 
     // Remove event listeners
-    this.coworkRunner.removeListener('message', this.handleMessage.bind(this));
-    this.coworkRunner.removeListener('messageUpdate', this.handleMessageUpdate.bind(this));
-    this.coworkRunner.removeListener('permissionRequest', this.handlePermissionRequest.bind(this));
-    this.coworkRunner.removeListener('complete', this.handleComplete.bind(this));
-    this.coworkRunner.removeListener('error', this.handleError.bind(this));
+    this.coworkRuntime.off('message', this.onMessage);
+    this.coworkRuntime.off('messageUpdate', this.onMessageUpdate);
+    this.coworkRuntime.off('permissionRequest', this.onPermissionRequest);
+    this.coworkRuntime.off('complete', this.onComplete);
+    this.coworkRuntime.off('error', this.onError);
   }
 }
