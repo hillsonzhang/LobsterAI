@@ -55,7 +55,7 @@
       }
     ]
   },
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/main/main.js",
   "engines": {
     "node": ">=24 <25"
   },

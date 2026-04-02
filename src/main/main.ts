@@ -1501,9 +1501,9 @@ function mergeCoworkSystemPrompt(
 }
 
 // 获取正确的预加载脚本路径
-const PRELOAD_PATH = app.isPackaged 
+const PRELOAD_PATH = app.isPackaged
   ? path.join(__dirname, 'preload.js')
-  : path.join(__dirname, '../dist-electron/preload.js');
+  : path.join(__dirname, '..', 'preload.js');
 
 // 获取应用图标路径（Windows 使用 .ico，其他平台使用 .png）
 const getAppIconPath = (): string | undefined => {
@@ -2827,7 +2827,7 @@ if (!gotTheLock) {
   ipcMain.handle('cowork:session:compact', async (_event, sessionId: string) => {
     try {
       const runner = getCoworkRunner();
-      const result = await runner.compactSession(sessionId, 'manual');
+      const result = await (runner as any).compactSession?.(sessionId, 'manual');
       return { success: true, ...result };
     } catch (error) {
       return {

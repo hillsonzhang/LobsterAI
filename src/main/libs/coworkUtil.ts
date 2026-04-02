@@ -1363,12 +1363,6 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
     // ragSidecar not available yet
   }
 
-  // Inject internal API base URL for skill scripts (e.g. scheduled-task creation)
-  const internalApiBaseURL = getInternalApiBaseURL();
-  if (internalApiBaseURL) {
-    env.LOBSTERAI_API_BASE_URL = internalApiBaseURL;
-  }
-
   // Skip system proxy resolution if proxy env vars already exist
   if (env.http_proxy || env.HTTP_PROXY || env.https_proxy || env.HTTPS_PROXY) {
     return env;

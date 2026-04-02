@@ -341,10 +341,10 @@ export interface UpdateAgentRequest {
   enabled?: boolean;
 }
 
-const COWORK_AGENT_ENGINE = 'openclaw';
+const COWORK_AGENT_ENGINE = 'yd_cowork';
 
 function normalizeCoworkAgentEngineValue(value?: string | null): CoworkAgentEngine {
-  if (value === COWORK_AGENT_ENGINE || value === 'openclaw') {
+  if (value === 'openclaw' || value === 'yd_cowork') {
     return value;
   }
   return COWORK_AGENT_ENGINE;
