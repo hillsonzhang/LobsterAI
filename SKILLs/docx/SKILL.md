@@ -1,198 +1,274 @@
 ---
 name: docx
-description: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. When Claude needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
-license: Proprietary. LICENSE.txt has complete terms
-official: true
+license: MIT
+metadata:
+  version: "1.0.0"
+  category: document-processing
+  author: MiniMaxAI
+  sources:
+    - "ECMA-376 Office Open XML File Formats"
+    - "GB/T 9704-2012 Layout Standard for Official Documents"
+    - "IEEE / ACM / APA / MLA / Chicago / Turabian Style Guides"
+    - "Springer LNCS / Nature / HBR Document Templates"
+description: >
+  Professional DOCX document creation, editing, and formatting using OpenXML SDK (.NET).
+  Three pipelines: (A) create new documents from scratch, (B) fill/edit content in existing
+  documents, (C) apply template formatting with XSD validation gate-check.
+  MUST use this skill whenever the user wants to produce, modify, or format a Word document —
+  including when they say "write a report", "draft a proposal", "make a contract",
+  "fill in this form", "reformat to match this template", or any task whose final output
+  is a .docx file. Even if the user doesn't mention "docx" explicitly, if the task
+  implies a printable/formal document, use this skill.
+triggers:
+  - Word
+  - docx
+  - document
+  - 文档
+  - Word文档
+  - 报告
+  - 合同
+  - 公文
+  - 排版
+  - 套模板
 ---
 
-# DOCX creation, editing, and analysis
+# minimax-docx
 
-## Overview
+Create, edit, and format DOCX documents via CLI tools or direct C# scripts built on OpenXML SDK (.NET).
 
-A user may ask you to create, edit, or analyze the contents of a .docx file. A .docx file is essentially a ZIP archive containing XML files and other resources that you can read or edit. You have different tools and workflows available for different tasks.
+## Setup
 
-## Workflow Decision Tree
+**First time:** `bash scripts/setup.sh` (or `powershell scripts/setup.ps1` on Windows, `--minimal` to skip optional deps).
 
-### Reading/Analyzing Content
-Use "Text extraction" or "Raw XML access" sections below
+**First operation in session:** `scripts/env_check.sh` — do not proceed if `NOT READY`. (Skip on subsequent operations within the same session.)
 
-### Creating New Document
-Use "Creating a new Word document" workflow
+## Quick Start: Direct C# Path
 
-### Editing Existing Document
-- **Your own document + simple changes**
-  Use "Basic OOXML editing" workflow
+When the task requires structural document manipulation (custom styles, complex tables, multi-section layouts, headers/footers, TOC, images), write C# directly instead of wrestling with CLI limitations. Use this scaffold:
 
-- **Someone else's document**
-  Use **"Redlining workflow"** (recommended default)
+```csharp
+// File: scripts/dotnet/task.csx  (or a new .cs in a Console project)
+// dotnet run --project scripts/dotnet/MiniMaxAIDocx.Cli -- run-script task.csx
+#r "nuget: DocumentFormat.OpenXml, 3.2.0"
 
-- **Legal, academic, business, or government docs**
-  Use **"Redlining workflow"** (required)
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 
-## Reading and analyzing content
+using var doc = WordprocessingDocument.Create("output.docx", WordprocessingDocumentType.Document);
+var mainPart = doc.AddMainDocumentPart();
+mainPart.Document = new Document(new Body());
 
-### Text extraction
-If you just need to read the text contents of a document, you should convert the document to markdown using pandoc. Pandoc provides excellent support for preserving document structure and can show tracked changes:
+// --- Your logic here ---
+// Read the relevant Samples/*.cs file FIRST for tested patterns.
+// See Samples/ table in References section below.
+```
+
+**Before writing any C#, read the relevant `Samples/*.cs` file** — they contain compilable, SDK-version-verified patterns. The Samples table in the References section below maps topics to files.
+
+## CLI shorthand
+
+All CLI commands below use `$CLI` as shorthand for:
+```bash
+dotnet run --project scripts/dotnet/MiniMaxAIDocx.Cli --
+```
+
+## Pipeline routing
+
+Route by checking: does the user have an input .docx file?
+
+```
+User task
+├─ No input file → Pipeline A: CREATE
+│   signals: "write", "create", "draft", "generate", "new", "make a report/proposal/memo"
+│   → Read references/scenario_a_create.md
+│
+└─ Has input .docx
+    ├─ Replace/fill/modify content → Pipeline B: FILL-EDIT
+    │   signals: "fill in", "replace", "update", "change text", "add section", "edit"
+    │   → Read references/scenario_b_edit_content.md
+    │
+    └─ Reformat/apply style/template → Pipeline C: FORMAT-APPLY
+        signals: "reformat", "apply template", "restyle", "match this format", "套模板", "排版"
+        ├─ Template is pure style (no content) → C-1: OVERLAY (apply styles to source)
+        └─ Template has structure (cover/TOC/example sections) → C-2: BASE-REPLACE
+            (use template as base, replace example content with user content)
+        → Read references/scenario_c_apply_template.md
+```
+
+If the request spans multiple pipelines, run them sequentially (e.g., Create then Format-Apply).
+
+## Pre-processing
+
+Convert `.doc` → `.docx` if needed: `scripts/doc_to_docx.sh input.doc output_dir/`
+
+Preview before editing (avoids reading raw XML): `scripts/docx_preview.sh document.docx`
+
+Analyze structure for editing scenarios: `$CLI analyze --input document.docx`
+
+## Scenario A: Create
+
+Read `references/scenario_a_create.md`, `references/typography_guide.md`, and `references/design_principles.md` first. Pick an aesthetic recipe from `Samples/AestheticRecipeSamples.cs` that matches the document type — do not invent formatting values. For CJK, also read `references/cjk_typography.md`.
+
+**Choose your path:**
+- **Simple** (plain text, minimal formatting): use CLI — `$CLI create --type report --output out.docx --config content.json`
+- **Structural** (custom styles, multi-section, TOC, images, complex tables): write C# directly. Read the relevant `Samples/*.cs` first.
+
+CLI options: `--type` (report|letter|memo|academic), `--title`, `--author`, `--page-size` (letter|a4|legal|a3), `--margins` (standard|narrow|wide), `--header`, `--footer`, `--page-numbers`, `--toc`, `--content-json`.
+
+Then run the **validation pipeline** (below).
+
+## Scenario B: Edit / Fill
+
+Read `references/scenario_b_edit_content.md` first. Preview → analyze → edit → validate.
+
+**Choose your path:**
+- **Simple** (text replacement, placeholder fill): use CLI subcommands.
+- **Structural** (add/reorganize sections, modify styles, manipulate tables, insert images): write C# directly. Read `references/openxml_element_order.md` and the relevant `Samples/*.cs`.
+
+Available CLI edit subcommands:
+- `replace-text --find "X" --replace "Y"`
+- `fill-placeholders --data '{"key":"value"}'`
+- `fill-table --data table.json`
+- `insert-section`, `remove-section`, `update-header-footer`
 
 ```bash
-# Convert document to markdown with tracked changes
-pandoc --track-changes=all path-to-file.docx -o output.md
-# Options: --track-changes=accept/reject/all
+$CLI edit replace-text --input in.docx --output out.docx --find "OLD" --replace "NEW"
+$CLI edit fill-placeholders --input in.docx --output out.docx --data '{"name":"John"}'
 ```
 
-### Raw XML access
-You need raw XML access for: comments, complex formatting, document structure, embedded media, and metadata. For any of these features, you'll need to unpack a document and read its raw XML contents.
-
-#### Unpacking a file
-`python ooxml/scripts/unpack.py <office_file> <output_directory>`
-
-#### Key file structures
-* `word/document.xml` - Main document contents
-* `word/comments.xml` - Comments referenced in document.xml
-* `word/media/` - Embedded images and media files
-* Tracked changes use `<w:ins>` (insertions) and `<w:del>` (deletions) tags
-
-## Creating a new Word document
-
-When creating a new Word document from scratch, use **docx-js**, which allows you to create Word documents using JavaScript/TypeScript.
-
-### Workflow
-1. **MANDATORY - READ ENTIRE FILE**: Read [`docx-js.md`](docx-js.md) (~500 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Read the full file content for detailed syntax, critical formatting rules, and best practices before proceeding with document creation.
-2. Create a JavaScript/TypeScript file using Document, Paragraph, TextRun components (You can assume all dependencies are installed, but if not, refer to the dependencies section below)
-3. Export as .docx using Packer.toBuffer()
-
-## Editing an existing Word document
-
-When editing an existing Word document, use the **Document library** (a Python library for OOXML manipulation). The library automatically handles infrastructure setup and provides methods for document manipulation. For complex scenarios, you can access the underlying DOM directly through the library.
-
-### Workflow
-1. **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) (~600 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Read the full file content for the Document library API and XML patterns for directly editing document files.
-2. Unpack the document: `python ooxml/scripts/unpack.py <office_file> <output_directory>`
-3. Create and run a Python script using the Document library (see "Document Library" section in ooxml.md)
-4. Pack the final document: `python ooxml/scripts/pack.py <input_directory> <office_file>`
-
-The Document library provides both high-level methods for common operations and direct DOM access for complex scenarios.
-
-## Redlining workflow for document review
-
-This workflow allows you to plan comprehensive tracked changes using markdown before implementing them in OOXML. **CRITICAL**: For complete tracked changes, you must implement ALL changes systematically.
-
-**Batching Strategy**: Group related changes into batches of 3-10 changes. This makes debugging manageable while maintaining efficiency. Test each batch before moving to the next.
-
-**Principle: Minimal, Precise Edits**
-When implementing tracked changes, only mark text that actually changes. Repeating unchanged text makes edits harder to review and appears unprofessional. Break replacements into: [unchanged text] + [deletion] + [insertion] + [unchanged text]. Preserve the original run's RSID for unchanged text by extracting the `<w:r>` element from the original and reusing it.
-
-Example - Changing "30 days" to "60 days" in a sentence:
-```python
-# BAD - Replaces entire sentence
-'<w:del><w:r><w:delText>The term is 30 days.</w:delText></w:r></w:del><w:ins><w:r><w:t>The term is 60 days.</w:t></w:r></w:ins>'
-
-# GOOD - Only marks what changed, preserves original <w:r> for unchanged text
-'<w:r w:rsidR="00AB12CD"><w:t>The term is </w:t></w:r><w:del><w:r><w:delText>30</w:delText></w:r></w:del><w:ins><w:r><w:t>60</w:t></w:r></w:ins><w:r w:rsidR="00AB12CD"><w:t> days.</w:t></w:r>'
-```
-
-### Tracked changes workflow
-
-1. **Get markdown representation**: Convert document to markdown with tracked changes preserved:
-   ```bash
-   pandoc --track-changes=all path-to-file.docx -o current.md
-   ```
-
-2. **Identify and group changes**: Review the document and identify ALL changes needed, organizing them into logical batches:
-
-   **Location methods** (for finding changes in XML):
-   - Section/heading numbers (e.g., "Section 3.2", "Article IV")
-   - Paragraph identifiers if numbered
-   - Grep patterns with unique surrounding text
-   - Document structure (e.g., "first paragraph", "signature block")
-   - **DO NOT use markdown line numbers** - they don't map to XML structure
-
-   **Batch organization** (group 3-10 related changes per batch):
-   - By section: "Batch 1: Section 2 amendments", "Batch 2: Section 5 updates"
-   - By type: "Batch 1: Date corrections", "Batch 2: Party name changes"
-   - By complexity: Start with simple text replacements, then tackle complex structural changes
-   - Sequential: "Batch 1: Pages 1-3", "Batch 2: Pages 4-6"
-
-3. **Read documentation and unpack**:
-   - **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) (~600 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Pay special attention to the "Document Library" and "Tracked Change Patterns" sections.
-   - **Unpack the document**: `python ooxml/scripts/unpack.py <file.docx> <dir>`
-   - **Note the suggested RSID**: The unpack script will suggest an RSID to use for your tracked changes. Copy this RSID for use in step 4b.
-
-4. **Implement changes in batches**: Group changes logically (by section, by type, or by proximity) and implement them together in a single script. This approach:
-   - Makes debugging easier (smaller batch = easier to isolate errors)
-   - Allows incremental progress
-   - Maintains efficiency (batch size of 3-10 changes works well)
-
-   **Suggested batch groupings:**
-   - By document section (e.g., "Section 3 changes", "Definitions", "Termination clause")
-   - By change type (e.g., "Date changes", "Party name updates", "Legal term replacements")
-   - By proximity (e.g., "Changes on pages 1-3", "Changes in first half of document")
-
-   For each batch of related changes:
-
-   **a. Map text to XML**: Grep for text in `word/document.xml` to verify how text is split across `<w:r>` elements.
-
-   **b. Create and run script**: Use `get_node` to find nodes, implement changes, then `doc.save()`. See **"Document Library"** section in ooxml.md for patterns.
-
-   **Note**: Always grep `word/document.xml` immediately before writing a script to get current line numbers and verify text content. Line numbers change after each script run.
-
-5. **Pack the document**: After all batches are complete, convert the unpacked directory back to .docx:
-   ```bash
-   python ooxml/scripts/pack.py unpacked reviewed-document.docx
-   ```
-
-6. **Final verification**: Do a comprehensive check of the complete document:
-   - Convert final document to markdown:
-     ```bash
-     pandoc --track-changes=all reviewed-document.docx -o verification.md
-     ```
-   - Verify ALL changes were applied correctly:
-     ```bash
-     grep "original phrase" verification.md  # Should NOT find it
-     grep "replacement phrase" verification.md  # Should find it
-     ```
-   - Check that no unintended changes were introduced
-
-
-## Converting Documents to Images
-
-To visually analyze Word documents, convert them to images using a two-step process:
-
-1. **Convert DOCX to PDF**:
-   ```bash
-   soffice --headless --convert-to pdf document.docx
-   ```
-
-2. **Convert PDF pages to JPEG images**:
-   ```bash
-   pdftoppm -jpeg -r 150 document.pdf page
-   ```
-   This creates files like `page-1.jpg`, `page-2.jpg`, etc.
-
-Options:
-- `-r 150`: Sets resolution to 150 DPI (adjust for quality/size balance)
-- `-jpeg`: Output JPEG format (use `-png` for PNG if preferred)
-- `-f N`: First page to convert (e.g., `-f 2` starts from page 2)
-- `-l N`: Last page to convert (e.g., `-l 5` stops at page 5)
-- `page`: Prefix for output files
-
-Example for specific range:
+Then run the **validation pipeline**. Also run diff to verify minimal changes:
 ```bash
-pdftoppm -jpeg -r 150 -f 2 -l 5 document.pdf page  # Converts only pages 2-5
+$CLI diff --before in.docx --after out.docx
 ```
 
-## Code Style Guidelines
-**IMPORTANT**: When generating code for DOCX operations:
-- Write concise code
-- Avoid verbose variable names and redundant operations
-- Avoid unnecessary print statements
+## Scenario C: Apply Template
 
-## Dependencies
+Read `references/scenario_c_apply_template.md` first. Preview and analyze both source and template.
 
-Required dependencies (install if not available):
+```bash
+$CLI apply-template --input source.docx --template template.docx --output out.docx
+```
 
-- **pandoc**: `sudo apt-get install pandoc` (for text extraction)
-- **docx**: `npm install -g docx` (for creating new documents)
-- **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)
-- **Poppler**: `sudo apt-get install poppler-utils` (for pdftoppm to convert PDF to images)
-- **defusedxml**: `pip install defusedxml` (for secure XML parsing)
+For complex template operations (multi-template merge, per-section headers/footers, style merging), write C# directly — see Critical Rules below for required patterns.
+
+Run the **validation pipeline**, then the **hard gate-check**:
+```bash
+$CLI validate --input out.docx --gate-check assets/xsd/business-rules.xsd
+```
+Gate-check is a **hard requirement**. Do NOT deliver until it passes. If it fails: diagnose, fix, re-run.
+
+Also diff to verify content preservation: `$CLI diff --before source.docx --after out.docx`
+
+## Validation pipeline
+
+Run after every write operation. For Scenario C the full pipeline is **mandatory**; for A/B it is **recommended** (skip only if the operation was trivially simple).
+
+```bash
+$CLI merge-runs --input doc.docx                                    # 1. consolidate runs
+$CLI validate --input doc.docx --xsd assets/xsd/wml-subset.xsd     # 2. XSD structure
+$CLI validate --input doc.docx --business                           # 3. business rules
+```
+
+If XSD fails, auto-repair and retry:
+```bash
+$CLI fix-order --input doc.docx
+$CLI validate --input doc.docx --xsd assets/xsd/wml-subset.xsd
+```
+
+If XSD still fails, fall back to business rules + preview:
+```bash
+$CLI validate --input doc.docx --business
+scripts/docx_preview.sh doc.docx
+# Verify: font contamination=0, table count correct, drawing count correct, sectPr count correct
+```
+
+Final preview: `scripts/docx_preview.sh doc.docx`
+
+## Critical rules
+
+These prevent file corruption — OpenXML is strict about element ordering.
+
+**Element order** (properties always first):
+
+| Parent | Order |
+|--------|-------|
+| `w:p`  | `pPr` → runs |
+| `w:r`  | `rPr` → `t`/`br`/`tab` |
+| `w:tbl`| `tblPr` → `tblGrid` → `tr` |
+| `w:tr` | `trPr` → `tc` |
+| `w:tc` | `tcPr` → `p` (min 1 `<w:p/>`) |
+| `w:body` | block content → `sectPr` (LAST child) |
+
+**Direct format contamination:** When copying content from a source document, inline `rPr` (fonts, color) and `pPr` (borders, shading, spacing) override template styles. Always strip direct formatting — keep only `pStyle` reference and `t` text. Clean tables too (including `pPr/rPr` inside cells).
+
+**Track changes:** `<w:del>` uses `<w:delText>`, never `<w:t>`. `<w:ins>` uses `<w:t>`, never `<w:delText>`.
+
+**Font size:** `w:sz` = points × 2 (12pt → `sz="24"`). Margins/spacing in DXA (1 inch = 1440, 1cm ≈ 567).
+
+**Heading styles MUST have OutlineLevel:** When defining heading styles (Heading1, ThesisH1, etc.), always include `new OutlineLevel { Val = N }` in `StyleParagraphProperties` (H1→0, H2→1, H3→2). Without this, Word sees them as plain styled text — TOC and navigation pane won't work.
+
+**Multi-template merge:** When given multiple template files (font, heading, breaks), read `references/scenario_c_apply_template.md` section "Multi-Template Merge" FIRST. Key rules:
+- Merge styles from all templates into one styles.xml. Structure (sections/breaks) comes from the breaks template.
+- Each content paragraph must appear exactly ONCE — never duplicate when inserting section breaks.
+- NEVER insert empty/blank paragraphs as padding or section separators. Output paragraph count must equal input. Use section break properties (`w:sectPr` inside `w:pPr`) and style spacing (`w:spacing` before/after) for visual separation.
+- Insert oddPage section breaks before EVERY chapter heading, not just the first. Even if a chapter has dual-column content, it MUST start with oddPage; use a second continuous break after the heading for column switching.
+- Dual-column chapters need THREE section breaks: (1) oddPage in preceding para's pPr, (2) continuous+cols=2 in the chapter HEADING's pPr, (3) continuous+cols=1 in the last body para's pPr to revert.
+- Copy `titlePg` settings from the breaks template for EACH section. Abstract and TOC sections typically need `titlePg=true`.
+
+**Multi-section headers/footers:** Templates with 10+ sections (e.g., Chinese thesis) have DIFFERENT headers/footers per section (Roman vs Arabic page numbers, different header text per zone). Rules:
+- Use C-2 Base-Replace: copy the TEMPLATE as output base, then replace body content. This preserves all sections, headers, footers, and titlePg settings automatically.
+- NEVER recreate headers/footers from scratch — copy template header/footer XML byte-for-byte.
+- NEVER add formatting (borders, alignment, font size) not present in the template header XML.
+- Non-cover sections MUST have header/footer XML files (at least empty header + page number footer).
+- See `references/scenario_c_apply_template.md` section "Multi-Section Header/Footer Transfer".
+
+## References
+
+Load as needed — don't load all at once. Pick the most relevant files for the task.
+
+**The C# samples and design references below are the project's knowledge base ("encyclopedia").** When writing OpenXML code, ALWAYS read the relevant sample file first — it contains compilable, SDK-version-verified patterns that prevent common errors. When making aesthetic decisions, read the design principles and recipe files — they encode tested, harmonious parameter sets from authoritative sources (IEEE, ACM, APA, Nature, etc.), not guesses.
+
+### Scenario guides (read first for each pipeline)
+
+| File | When |
+|------|------|
+| `references/scenario_a_create.md` | Pipeline A: creating from scratch |
+| `references/scenario_b_edit_content.md` | Pipeline B: editing existing content |
+| `references/scenario_c_apply_template.md` | Pipeline C: applying template formatting |
+
+### C# code samples (compilable, heavily commented — read when writing code)
+
+| File | Topic |
+|------|-------|
+| `Samples/DocumentCreationSamples.cs` | Document lifecycle: create, open, save, streams, doc defaults, settings, properties, page setup, multi-section |
+| `Samples/StyleSystemSamples.cs` | Styles: Normal/Heading chain, character/table/list styles, DocDefaults, latentStyles, CJK 公文, APA 7th, import, resolve inheritance |
+| `Samples/CharacterFormattingSamples.cs` | RunProperties: fonts, size, bold/italic, all underlines, color, highlight, strike, sub/super, caps, spacing, shading, border, emphasis marks |
+| `Samples/ParagraphFormattingSamples.cs` | ParagraphProperties: justification, indentation, line/paragraph spacing, keep/widow, outline level, borders, tabs, numbering, bidi, frame |
+| `Samples/TableSamples.cs` | Tables: borders, grid, cell props, margins, row height, header repeat, merge (H+V), nested, floating, three-line 三线表, zebra striping |
+| `Samples/HeaderFooterSamples.cs` | Headers/footers: page numbers, "Page X of Y", first/even/odd, logo image, table layout, 公文 "-X-", per-section |
+| `Samples/ImageSamples.cs` | Images: inline, floating, text wrapping, border, alt text, in header/table, replace, SVG fallback, dimension calc |
+| `Samples/ListAndNumberingSamples.cs` | Numbering: bullets, multi-level decimal, custom symbols, outline→headings, legal, Chinese 一/（一）/1./(1), restart/continue |
+| `Samples/FieldAndTocSamples.cs` | Fields: TOC, SimpleField vs complex field, DATE/PAGE/REF/SEQ/MERGEFIELD/IF/STYLEREF, TOC styles |
+| `Samples/FootnoteAndCommentSamples.cs` | Footnotes, endnotes, comments (4-file system), bookmarks, hyperlinks (internal + external) |
+| `Samples/TrackChangesSamples.cs` | Revisions: insertions (w:t), deletions (w:delText!), formatting changes, accept/reject all, move tracking |
+| `Samples/AestheticRecipeSamples.cs` | 13 aesthetic recipes from authoritative sources: ModernCorporate, AcademicThesis, ExecutiveBrief, ChineseGovernment (GB/T 9704), MinimalModern, IEEE Conference, ACM sigconf, APA 7th, MLA 9th, Chicago/Turabian, Springer LNCS, Nature, HBR — each with exact values from official style guides |
+
+Note: `Samples/` path is relative to `scripts/dotnet/MiniMaxAIDocx.Core/`.
+
+### Markdown references (read when you need specifications or design rules)
+
+| File | When |
+|------|------|
+| `references/openxml_element_order.md` | XML element ordering rules (prevents corruption) |
+| `references/openxml_units.md` | Unit conversion: DXA, EMU, half-points, eighth-points |
+| `references/openxml_encyclopedia_part1.md` | Detailed C# encyclopedia: document creation, styles, character & paragraph formatting |
+| `references/openxml_encyclopedia_part2.md` | Detailed C# encyclopedia: page setup, tables, headers/footers, sections, doc properties |
+| `references/openxml_encyclopedia_part3.md` | Detailed C# encyclopedia: TOC, footnotes, fields, track changes, comments, images, math, numbering, protection |
+| `references/typography_guide.md` | Font pairing, sizes, spacing, page layout, table design, color schemes |
+| `references/cjk_typography.md` | CJK fonts, 字号 sizes, RunFonts mapping, GB/T 9704 公文 standard |
+| `references/cjk_university_template_guide.md` | Chinese university thesis templates: numeric styleIds (1/2/3 vs Heading1), document zone structure (cover→abstract→TOC→body→references), font expectations, common mistakes |
+| `references/design_principles.md` | **Aesthetic foundations**: 6 design principles (white space, contrast/scale, proximity, alignment, repetition, hierarchy) — teaches WHY, not just WHAT |
+| `references/design_good_bad_examples.md` | **Good vs Bad comparisons**: 10 categories of typography mistakes with OpenXML values, ASCII mockups, and fixes |
+| `references/track_changes_guide.md` | Revision marks deep dive |
+| `references/troubleshooting.md` | **Symptom-driven fixes**: 13 common problems indexed by what you SEE (headings wrong, images missing, TOC broken, etc.) — search by symptom, find the fix |
